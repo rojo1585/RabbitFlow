@@ -196,8 +196,7 @@ public sealed class ManagedConnection : IAsyncDisposable
             ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
         };
 
-        _logger.LogInformation($"[{Name}] Connecting to {_options.HostName}:{_options.Port}...",
-            _options.HostName, _options.Port);
+        _logger.LogInformation($"[{Name}] Connecting to {_options.HostName}:{_options.Port}...",_options.HostName, _options.Port);
 
         var connection = await factory.CreateConnectionAsync(cancellationToken);
 
