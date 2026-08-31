@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Diagnostics;
+using RabbitFlow.Infrastructure.Consuming;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
