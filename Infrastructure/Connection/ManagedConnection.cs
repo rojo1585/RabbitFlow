@@ -28,22 +28,25 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// <remarks>
 /// Creates a new managed connection. Does NOT connect yet — call <see cref="Start"/>.
 /// </remarks>
-public sealed class ManagedConnection : IAsyncDisposable
+/// <param name="_name">
+/// The connection name (typically the dictionary key from configuration).
+/// This overrides <see cref="RabbitConnectionOptions.Name"/>.
+/// </param>
+public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
     private readonly Lock _lock = new();
+
     private IConnection? _connection;
     private TaskCompletionSource<bool>? _connectionClosedTcs;
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
     private int _backoffSeconds = 1;
     private volatile bool _disposed;
-    private readonly RabbitConnectionOptions _options;
-    private readonly ILogger<ManagedConnection> _logger;
 
     /// <summary>
     /// The connection name from <see cref="RabbitConnectionOptions.Name"/>.
     /// </summary>
-    public string Name { get; }
+    public string Name { get; } = _name;
 
     /// <summary>
     /// Whether the connection is currently open and operational.
@@ -58,24 +61,6 @@ public sealed class ManagedConnection : IAsyncDisposable
         }
     }
 
-    public ManagedConnection(RabbitConnectionOptions options, ILogger<ManagedConnection> logger)
-    {
-        this._options = options;
-        this._logger = logger;
-        Name = _options.Name;
-    }
-
-    /// <param name="name">
-    /// The connection name (typically the dictionary key from configuration).
-    /// This overrides <see cref="RabbitConnectionOptions.Name"/>.
-    /// </param>
-    public ManagedConnection(string name, RabbitConnectionOptions options, ILogger<ManagedConnection> logger)
-    {
-        Name = name;
-        this._options = options;
-        this._logger = logger;
-    }
-
     /// <summary>
     /// Starts the background connection loop. Returns immediately.
     /// The connection is established asynchronously.
@@ -84,7 +69,6 @@ public sealed class ManagedConnection : IAsyncDisposable
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
-
 
         _loopCts = new CancellationTokenSource();
         _loopTask = Task.Run(() => ConnectionLoopAsync(_loopCts.Token));
@@ -98,12 +82,22 @@ public sealed class ManagedConnection : IAsyncDisposable
     /// If the connection is not open, this waits up to <paramref name="timeout"/>
     /// for the connection to become available.
     /// </para>
+    /// 
+    /// <para>
+    /// The <paramref name="channelOptions"/> parameter is passed through to
+    /// <c>IConnection.CreateChannelAsync</c>. Use it to enable publisher confirms
+    /// via <c>CreateChannelOptions(publisherConfirmationsEnabled: true, ...).</c>
+    /// </para>
     /// </summary>
+    /// <param name="channelOptions">
+    /// Optional channel creation options (e.g. publisher confirms configuration).
+    /// When <c>null</c>, the broker defaults are used (no confirms).
+    /// </param>
     /// <returns>A new <see cref="IChannel"/> on the current connection.</returns>
     /// <exception cref="TimeoutException">
     /// Thrown if no connection is available within the timeout.
     /// </exception>
-    public async Task<IChannel> CreateChannelAsync(TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
 
@@ -122,7 +116,8 @@ public sealed class ManagedConnection : IAsyncDisposable
                 {
                     try
                     {
-                        var channel = await conn.CreateChannelAsync(cancellationToken: combinedCts.Token);
+                        var channel = await conn.CreateChannelAsync(channelOptions, combinedCts.Token);
+                        _logger.LogDebug($"[{Name}] Channel #{channel.ChannelNumber} created");
                         return channel;
                     }
                     catch (AlreadyClosedException)
@@ -130,6 +125,8 @@ public sealed class ManagedConnection : IAsyncDisposable
                         continue;
                     }
                 }
+
+                // Connection not ready — wait briefly and retry
                 await Task.Delay(200, combinedCts.Token);
             }
         }
@@ -171,9 +168,10 @@ public sealed class ManagedConnection : IAsyncDisposable
                 SafeCloseConnection();
             }
 
-            // Connection closed or errored — wait before reconnecting
             if (!cancellationToken.IsCancellationRequested)
+            {
                 await BackoffDelayAsync(cancellationToken);
+            }
         }
 
         _logger.LogInformation($"[{Name}] Connection loop stopped");
@@ -196,7 +194,7 @@ public sealed class ManagedConnection : IAsyncDisposable
             ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
         };
 
-        _logger.LogInformation($"[{Name}] Connecting to {_options.HostName}:{_options.Port}...",_options.HostName, _options.Port);
+        _logger.LogInformation($"[{Name}] Connecting to {_options.HostName}:{_options.Port}...", _options.HostName, _options.Port);
 
         var connection = await factory.CreateConnectionAsync(cancellationToken);
 
@@ -216,7 +214,7 @@ public sealed class ManagedConnection : IAsyncDisposable
 
         if (wasDisposed)
         {
-            await connection.CloseAsync();
+            await connection.CloseAsync(cancellationToken);
             return;
         }
 
@@ -224,6 +222,7 @@ public sealed class ManagedConnection : IAsyncDisposable
 
         _logger.LogInformation($"[{Name}] Connected to {_options.HostName}:{_options.Port}/{_options.VirtualHost} (local port {connection.LocalPort})");
     }
+
     /// <summary>
     /// Handles connection shutdown events. Completes the TCS so that
     /// <see cref="ConnectionLoopAsync"/> wakes up and reconnects.
@@ -232,30 +231,21 @@ public sealed class ManagedConnection : IAsyncDisposable
     {
         // Unsubscribe from this connection's events
         if (sender is IConnection conn)
-        {
             conn.ConnectionShutdownAsync -= OnConnectionShutdown;
-        }
 
         lock (_lock)
-        {
-            // Only null out if it's the same connection (avoid race with a new connection)
             if (ReferenceEquals(sender, _connection))
-            {
                 _connection = null;
-            }
-        }
 
         // Signal the loop to wake up
         _connectionClosedTcs?.TrySetResult(true);
 
         if (args.Initiator == ShutdownInitiator.Application)
-        {
             _logger.LogInformation($"[{Name}] Connection closed by application");
-        }
+
         else
-        {
             _logger.LogWarning($"[{Name}] Connection lost: {args.ReplyText} (initiator: {args.Initiator}), will reconnect...", args.ReplyText, args.Initiator);
-        }
+
 
         return Task.CompletedTask;
     }
@@ -268,7 +258,6 @@ public sealed class ManagedConnection : IAsyncDisposable
         var delay = TimeSpan.FromSeconds(_backoffSeconds);
 
         _logger.LogInformation($"[{Name}] Reconnecting in {delay.TotalSeconds}s...");
-
         await Task.Delay(delay, cancellationToken);
 
         // Double the backoff, capped at MaxBackoffSeconds
@@ -298,7 +287,6 @@ public sealed class ManagedConnection : IAsyncDisposable
 
         try
         {
-            // Fire-and-forget close
             _ = connToClose.CloseAsync();
         }
         catch (Exception ex)
@@ -327,10 +315,10 @@ public sealed class ManagedConnection : IAsyncDisposable
             {
                 try
                 {
-
+                    // Give the loop a moment to finish gracefully
                     await Task.WhenAny(_loopTask, Task.Delay(2000));
                 }
-                catch (OperationCanceledException) { }
+                catch (OperationCanceledException) { /* expected */ }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, $"[{Name}] Error waiting for loop to stop");
@@ -339,6 +327,7 @@ public sealed class ManagedConnection : IAsyncDisposable
 
             _loopCts.Dispose();
         }
+
         // Close the AMQP connection
         IConnection? connToClose;
         lock (_lock)
@@ -352,7 +341,7 @@ public sealed class ManagedConnection : IAsyncDisposable
                 {
                     connToClose.ConnectionShutdownAsync -= OnConnectionShutdown;
                 }
-                catch { }
+                catch { /* ignore */ }
             }
         }
 
