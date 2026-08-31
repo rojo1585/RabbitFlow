@@ -38,7 +38,7 @@ namespace RabbitFlow.Configuration
         /// </returns>
         public bool ShouldRetry(int deliveryCount)
         {
-            return deliveryCount <= MaxRetries;
+            return deliveryCount < MaxRetries;
         }
 
         /// <summary>
