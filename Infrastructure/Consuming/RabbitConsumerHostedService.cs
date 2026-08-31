@@ -6,12 +6,11 @@ using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
-using RabbitFlow.Infrastructure.Consuming;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.Publishing;
+namespace RabbitFlow.Infrastructure.Consuming;
 
 
 /// <summary>
