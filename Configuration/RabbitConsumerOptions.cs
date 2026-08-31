@@ -134,7 +134,12 @@ namespace RabbitFlow.Configuration
 
         /// <summary>
         /// Resolved retry delays (falls back to default if not explicitly set).
+        /// The default delays are [5s, 30s] — two delays for 3 total attempts.
+        /// The first retry has no delay (handled by immediate requeue or zero-TTL queue).
+        /// Lazily cached to avoid repeated array allocation.
         /// </summary>
-        internal TimeSpan[] ResolvedRetryDelays => RetryDelays ?? [TimeSpan.Zero, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30)];
+        internal TimeSpan[] ResolvedRetryDelays => _resolvedRetryDelays ??= RetryDelays ?? [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30)];
+
+        private TimeSpan[]? _resolvedRetryDelays;
     }
 }

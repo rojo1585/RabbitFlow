@@ -48,12 +48,12 @@ namespace RabbitFlow.Infrastructure.Publishing;
 /// for type resolution. AMQP headers survive DLX/retry re-queuing.
 /// </para>
 /// </summary>
-internal sealed class NamedRabbitPublisher(string producerKey,
-                                           RabbitProducerOptions options,
-                                           ManagedConnection connection,
-                                           IMessageSerializer serializer,
-                                           ILogger<NamedRabbitPublisher> logger,
-                                           TimeProvider? timeProvider = null)
+internal sealed class NamedRabbitPublisher(string _producerKey,
+                                           RabbitProducerOptions _options,
+                                           ManagedConnection _connection,
+                                           IMessageSerializer _serializer,
+                                           ILogger<NamedRabbitPublisher> _logger,
+                                           TimeProvider? _timeProvider = null)
 {
     /// <summary>
     /// Caches <see cref="EventVersionAttribute"/> lookups per event type.
@@ -67,8 +67,12 @@ internal sealed class NamedRabbitPublisher(string producerKey,
     /// <c>PublishException</c> on nack or basic.return, eliminating manual event handling.
     /// </summary>
     private static readonly CreateChannelOptions ConfirmChannelOptions = new(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-    private volatile bool _topologyDeclared;
+    private readonly TimeProvider _timeProvider = _timeProvider ?? TimeProvider.System;
+    /// <summary>
+    /// Tracks whether topology has been declared for this producer.
+    /// Uses int (0/1) with Interlocked for atomic check-and-set.
+    /// </summary>
+    private int _topologyDeclared;
 
     /// <summary>
     /// Publishes a single event to the configured exchange.
@@ -76,20 +80,20 @@ internal sealed class NamedRabbitPublisher(string producerKey,
     /// </summary>
     public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await connection.CreateChannelAsync(options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
 
         try
         {
             await InitializeChannelAsync(channel, cancellationToken);
 
-            var routingKey = routingKeyOverride ?? options.RoutingKey;
+            var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (body, properties) = BuildMessage(@event, routingKey);
 
             using var activity = StartPublishActivity<TEvent>(routingKey);
 
             await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
 
-            logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", producerKey, typeof(TEvent).FullName, options.ExchangeName, routingKey);
+            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", _producerKey, typeof(TEvent).FullName, _options.ExchangeName, routingKey);
         }
         finally
         {
@@ -114,13 +118,13 @@ internal sealed class NamedRabbitPublisher(string producerKey,
 
         if (eventList.Count == 0) return;
 
-        var channel = await connection.CreateChannelAsync(options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
 
         try
         {
             await InitializeChannelAsync(channel, cancellationToken);
 
-            var routingKey = routingKeyOverride ?? options.RoutingKey;
+            var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var publishedCount = 0;
 
             for (var i = 0; i < eventList.Count; i++)
@@ -133,7 +137,7 @@ internal sealed class NamedRabbitPublisher(string producerKey,
                 publishedCount++;
             }
 
-            logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events => '{Exchange}'", producerKey, publishedCount, typeof(TEvent).FullName, options.ExchangeName);
+            _logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events => '{Exchange}'", _producerKey, publishedCount, typeof(TEvent).FullName, _options.ExchangeName);
         }
         finally
         {
@@ -157,12 +161,12 @@ internal sealed class NamedRabbitPublisher(string producerKey,
     /// </summary>
     private async Task ExecutePublishAsync(IChannel channel, string routingKey, BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
     {
-        if (!options.EnablePublisherConfirms)
+        if (!_options.EnablePublisherConfirms)
         {
             await channel.BasicPublishAsync(
-                exchange: options.ExchangeName,
+                exchange: _options.ExchangeName,
                 routingKey: routingKey,
-                mandatory: options.Mandatory,
+                mandatory: _options.Mandatory,
                 basicProperties: properties,
                 body: body,
                 cancellationToken: cancellationToken);
@@ -172,7 +176,7 @@ internal sealed class NamedRabbitPublisher(string producerKey,
         // With publisher confirmation tracking enabled, BasicPublishAsync internally
         // waits for the broker's ack before returning. We apply a timeout via
         // CancellationToken so the caller doesn't block indefinitely.
-        var confirmTimeout = TimeSpan.FromMilliseconds(options.PublishConfirmTimeoutMs);
+        var confirmTimeout = TimeSpan.FromMilliseconds(_options.PublishConfirmTimeoutMs);
 
         using var timeoutCts = new CancellationTokenSource(confirmTimeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
@@ -180,9 +184,9 @@ internal sealed class NamedRabbitPublisher(string producerKey,
         try
         {
             await channel.BasicPublishAsync(
-                exchange: options.ExchangeName,
+                exchange: _options.ExchangeName,
                 routingKey: routingKey,
-                mandatory: options.Mandatory,
+                mandatory: _options.Mandatory,
                 basicProperties: properties,
                 body: body,
                 cancellationToken: linkedCts.Token);
@@ -191,14 +195,14 @@ internal sealed class NamedRabbitPublisher(string producerKey,
         {
             // Broker nacked the message or returned it as unroutable.
             // Wrap in a domain exception so consumers don't need a dependency on RabbitMQ.Client.
-            throw new PublisherNackException(producerKey, ex.PublishSequenceNumber, ex.IsReturn, ex);
+            throw new PublisherNackException(_producerKey, ex.PublishSequenceNumber, ex.IsReturn, ex);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Our timeout fired — the broker didn't confirm within the window.
             // The channel is left in a dirty state, but since we create a new channel
             // per publish, it will be closed in the finally block.
-            throw new PublisherConfirmTimeoutException(producerKey, confirmTimeout);
+            throw new PublisherConfirmTimeoutException(_producerKey, confirmTimeout);
         }
     }
 
@@ -218,15 +222,15 @@ internal sealed class NamedRabbitPublisher(string producerKey,
     }
 
     /// <summary>
-    /// Declares topology (first call only).
+    /// Declares topology (first call only). Uses <see cref="Interlocked.CompareExchange"/>
+    /// to ensure exactly one declaration even under concurrent publishes.
     /// </summary>
     private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
     {
-        if (!_topologyDeclared && options.AutoDeclareTopology)
+        if (Interlocked.CompareExchange(ref _topologyDeclared, 1, 0) == 0 && _options.AutoDeclareTopology)
         {
-            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, options, logger, cancellationToken);
-
-            _topologyDeclared = true;
+            await TopologyDeclarator.DeclareProducerTopologyAsync(
+                channel, _options, _logger, cancellationToken);
         }
     }
 
@@ -257,13 +261,13 @@ internal sealed class NamedRabbitPublisher(string producerKey,
                 [MessageHeaders.CorrelationId] = correlationId,
                 [MessageHeaders.MessageId] = messageId,
                 [MessageHeaders.PublishedAt] = now.ToString("O"),
-                [MessageHeaders.PublisherName] = producerKey,
+                [MessageHeaders.PublisherName] = _producerKey,
                 [MessageHeaders.EventType] = eventTypeName,
                 [MessageHeaders.EventVersion] = eventVersion.ToString(),
             },
         };
 
-        var body = serializer.Serialize(@event);
+        var body = _serializer.Serialize(@event);
         return (body, properties);
     }
 

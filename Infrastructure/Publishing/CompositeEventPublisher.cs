@@ -32,30 +32,34 @@ namespace RabbitFlow.Infrastructure.Publishing;
 /// </summary>
 internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPublisher
 {
-    private readonly Dictionary<string, NamedRabbitPublisher> _producers;
+    private readonly IReadOnlyDictionary<string, NamedRabbitPublisher> _producers;
     private readonly ILogger<CompositeEventPublisher> _logger;
     private readonly NamedRabbitPublisher? _defaultProducer;
 
     public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, IEnumerable<RabbitProducerOptions> producerConfigs, ILoggerFactory loggerFactory)
     {
         _logger = loggerFactory.CreateLogger<CompositeEventPublisher>();
-        _producers = [];
+        var producers = new Dictionary<string, NamedRabbitPublisher>();
 
         foreach (var config in producerConfigs)
         {
             // Validate no duplicate ServiceKey — fail fast at startup, not at publish time
-            if (!_producers.TryAdd(config.ServiceKey, CreatePublisher(config, connectionRegistry, serializer, loggerFactory)))
+            if (!producers.TryAdd(config.ServiceKey, CreatePublisher(config, connectionRegistry, serializer, loggerFactory)))
                 throw Exceptions.RabbitMqConfigurationException.DuplicateProducerKey(config.ServiceKey);
+
 
             _logger.LogDebug("Registered producer '{Key}' → exchange '{Exchange}' on connection '{Connection}'", config.ServiceKey, config.ExchangeName, config.ConnectionName);
         }
 
         // Cache the single producer for fast default resolution (no enumerator allocation)
-        if (_producers.Count == 1)
-            _defaultProducer = _producers.Values.First();
+        if (producers.Count == 1)
+            _defaultProducer = producers.Values.First();
+
+        _producers = producers;
 
         _logger.LogInformation("Composite publisher initialized with {Count} producer(s)", _producers.Count);
     }
+
 
     /// <summary>
     /// Resolves the default producer (the only one registered).
@@ -74,6 +78,10 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
 
         throw new AmbiguousProducerException(_producers.Count, [.. _producers.Keys]);
     }
+    /// <summary>
+    /// The count of registered producers. Useful for diagnostics.
+    /// </summary>
+    public int ProducerCount => _producers.Count;
 
     /// <summary>
     /// Resolves a producer by key.
@@ -96,7 +104,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     private static NamedRabbitPublisher CreatePublisher(RabbitProducerOptions config, RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, ILoggerFactory loggerFactory)
     {
         var connection = connectionRegistry.GetConnection(config.ConnectionName);
-        return new NamedRabbitPublisher(producerKey: config.ServiceKey, options: config, connection: connection, serializer: serializer, logger: loggerFactory.CreateLogger<NamedRabbitPublisher>());
+        return new NamedRabbitPublisher(_producerKey: config.ServiceKey, _options: config, _connection: connection, _serializer: serializer, _logger: loggerFactory.CreateLogger<NamedRabbitPublisher>());
     }
 
     // ─── IEventPublisher ──────────────────────────────────────────────
