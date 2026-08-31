@@ -4,7 +4,6 @@ using RabbitMQ.Client;
 
 namespace RabbitFlow.Infrastructure.Topology;
 
-
 /// <summary>
 /// Declares AMQP topology (exchanges, queues, bindings, DLX, retry queues)
 /// on a channel. Called at startup by producers and consumers.
@@ -25,7 +24,12 @@ internal static class TopologyDeclarator
     {
         if (!options.AutoDeclareTopology) return;
 
-        await channel.ExchangeDeclareAsync(exchange: options.ExchangeName, type: options.ExchangeType, durable: true, autoDelete: false, cancellationToken: cancellationToken);
+        await channel.ExchangeDeclareAsync(
+            exchange: options.ExchangeName,
+            type: options.ExchangeType,
+            durable: true,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
 
         logger.LogInformation("[Producer:{Key}] Declared exchange '{Exchange}' ({Type})", options.ServiceKey, options.ExchangeName, options.ExchangeType);
     }
@@ -39,19 +43,29 @@ internal static class TopologyDeclarator
         if (!options.AutoDeclareTopology) return;
 
         // 1. Main exchange
-        await channel.ExchangeDeclareAsync(exchange: options.ExchangeName, type: options.ExchangeType, durable: true, autoDelete: false, cancellationToken: cancellationToken);
+        await channel.ExchangeDeclareAsync(
+            exchange: options.ExchangeName,
+            type: options.ExchangeType,
+            durable: true,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
 
         logger.LogInformation("[Consumer:{Key}] Declared exchange '{Exchange}' ({Type})", options.ServiceKey, options.ExchangeName, options.ExchangeType);
 
-        // 2. Dead letter topology (before main queue, because main queue references DLX)
-        if (options.EnableDeadLetter || options.EnableRetry)
-            await DeclareDeadLetterTopologyAsync(channel, options, logger, cancellationToken);
+        // 2. Retry topology (before main queue because main queue may reference DLX)
+        if (options.EnableRetry)
+            await DeclareRetryTopologyAsync(channel, options, logger, cancellationToken);
 
+        // 3. Dead letter topology (DLQ — not bound to DLX, consumer publishes directly)
+        if (options.EnableDeadLetter)
+            await DeclareDeadLetterQueueAsync(channel, options, logger, cancellationToken);
 
-        // 3. Main queue (with x-dead-letter-exchange pointing to DLX)
+        // 4. Main queue (with x-dead-letter-exchange pointing to DLX for retry)
         var queueArgs = new Dictionary<string, object?>();
 
-        if (options.EnableDeadLetter || options.EnableRetry)
+        if (options.EnableRetry)
+            // NACKed messages go to the retry DLX for delay-based re-delivery.
+            // The consumer decides whether to retry or dead-letter based on x-death count.
             queueArgs["x-dead-letter-exchange"] = options.ResolvedDlxName;
 
         await channel.QueueDeclareAsync(
@@ -62,83 +76,142 @@ internal static class TopologyDeclarator
             arguments: queueArgs,
             cancellationToken: cancellationToken);
 
-        // 4. Bind queue to exchange
-        await channel.QueueBindAsync(queue: options.QueueName, exchange: options.ExchangeName, routingKey: options.RoutingKey, cancellationToken: cancellationToken);
+        // 5. Bind queue to exchange
+        await channel.QueueBindAsync(
+            queue: options.QueueName,
+            exchange: options.ExchangeName,
+            routingKey: options.RoutingKey,
+            cancellationToken: cancellationToken);
 
         logger.LogInformation("[Consumer:{Key}] Declared queue '{Queue}' bound to '{Exchange}' with key '{RoutingKey}'", options.ServiceKey, options.QueueName, options.ExchangeName, options.RoutingKey);
     }
 
     /// <summary>
-    /// Declares the dead-letter exchange, dead-letter queue, and retry queues.
+    /// Declares the DLX exchange (direct) and retry queues with per-queue TTLs.
     /// 
     /// <para>
-    /// Topology when EnableRetry=true, MaxRetries=3, Delays=[0s, 5s, 30s]:
+    /// The DLX use <c>direct</c> type (NOT fanout) so that the consumer can control
+    /// routing. When the consumer NACKs, the message goes to the DLX with the main
+    /// queue's routing key. The retry queues are bound to the DLX with that same key,
+    /// so the message enters the retry queue chain.
+    /// </para>
     /// 
+    /// <para>
+    /// IMPORTANT: The DLQ is NOT bound to this DLX. When retries are exhausted,
+    /// the consumer publishes the dead-lettered message directly to the DLQ exchange
+    /// or uses a separate publishing path. This prevents exhausted messages from
+    /// entering retry queues.
+    /// </para>
+    /// 
+    /// <para>
+    /// Topology when EnableRetry=true, MaxRetries=3, Delays=[5s, 30s]:
     /// <code>
-    /// DLX Exchange: "{QueueName}.dlx" (fanout)
-    ///     ↑ NACKed messages arrive here
-    ///     │
-    ///     ├── Retry Queue 1: "{QueueName}.retry.5s" (TTL=5s)
-    ///     │     └── x-dead-letter-exchange: main exchange
-    ///     │     └── x-dead-letter-routing-key: main routing key
-    ///     │
-    ///     ├── Retry Queue 2: "{QueueName}.retry.30s" (TTL=30s)
-    ///     │     └── x-dead-letter-exchange: main exchange
-    ///     │     └── x-dead-letter-routing-key: main routing key
-    ///     │
-    ///     └── DLQ: "{QueueName}.dlq" (permanent storage)
-    ///         └── Bound to DLX with routing key "{QueueName}"
-    /// </code>
+    /// Main Queue (x-dead-letter-exchange: DLX)
+    ///     ↓ NACK (requeue=false)
+    /// DLX Exchange: "{QueueName}.dlx" (direct)
+    ///     ↓ routing key = main routing key
+    /// Retry Queue 1: "{QueueName}.retry.5s" (TTL=5s)
+    ///     └── x-dead-letter-exchange: main exchange
+    ///     └── x-dead-letter-routing-key: main routing key
+    ///     ↓ TTL expires → Main Exchange → Main Queue (attempt 2)
+    /// Retry Queue 2: "{QueueName}.retry.30s" (TTL=30s)
+    ///     └── x-dead-letter-exchange: main exchange
+    ///     └── x-dead-letter-routing-key: main routing key
+    ///     ↓ TTL expires → Main Exchange → Main Queue (attempt 3)
     /// 
-    /// Flow:
-    ///   Main Queue → NACK → DLX → retry queue (TTL expires) → Main Exchange → Main Queue
-    ///   After MaxRetries: Main Queue → NACK → DLX → DLQ → IDeadLetterHandler
+    /// DLQ: "{QueueName}.dlq" (NOT bound to DLX — consumer publishes directly)
+    /// </code>
     /// </para>
     /// </summary>
-    private static async Task DeclareDeadLetterTopologyAsync(IChannel channel, RabbitConsumerOptions options, ILogger logger, CancellationToken cancellationToken)
+    private static async Task DeclareRetryTopologyAsync(IChannel channel, RabbitConsumerOptions options, ILogger logger, CancellationToken cancellationToken)
     {
         var dlxName = options.ResolvedDlxName;
+        var delays = options.ResolvedRetryDelays;
+
+        // 1. DLX Exchange (direct — routes by key)
+        await channel.ExchangeDeclareAsync(
+            exchange: dlxName,
+            type: "direct",
+            durable: true,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
+
+        // 2. Retry queues (one per non-zero delay)
+        var retryCount = 0;
+        for (int i = 0; i < delays.Length; i++)
+        {
+            var delay = delays[i];
+
+            // Skip zero-delay entries: the consumer handles immediate retry
+            // by NACKing with requeue=true for the first failure.
+            if (delay <= TimeSpan.Zero)
+                continue;
+
+            retryCount++;
+            var retryQueueName = $"{options.QueueName}.retry.{(long)delay.TotalSeconds}s";
+
+            var retryArgs = new Dictionary<string, object?>
+            {
+                // When TTL expires, message goes back to the main exchange
+                ["x-dead-letter-exchange"] = options.ExchangeName,
+                ["x-dead-letter-routing-key"] = options.RoutingKey,
+                ["x-message-ttl"] = (int)delay.TotalMilliseconds,
+            };
+
+            await channel.QueueDeclareAsync(
+                queue: retryQueueName,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: retryArgs,
+                cancellationToken: cancellationToken);
+
+            // Bind retry queue to DLX using the MAIN routing key.
+            // When a message is NACKed from the main queue, RabbitMQ routes it
+            // to the DLX with the message's original routing key (or the queue's
+            // x-dead-letter-routing-key if set). We use the main routing key
+            // so that all retry queues receive the dead-lettered message.
+            await channel.QueueBindAsync(
+                queue: retryQueueName,
+                exchange: dlxName,
+                routingKey: options.RoutingKey,
+                cancellationToken: cancellationToken);
+
+            logger.LogInformation("[Consumer:{Key}] Declared retry queue '{RetryQueue}' (TTL={TTL}ms)", options.ServiceKey, retryQueueName, (int)delay.TotalMilliseconds);
+        }
+
+        logger.LogInformation("[Consumer:{Key}] Declared DLX '{Dlx}' (direct) with {Count} retry queue(s)", options.ServiceKey, dlxName, retryCount);
+    }
+
+    /// <summary>
+    /// Declares the dead-letter queue (DLQ) as a standalone queue.
+    /// 
+    /// <para>
+    /// The DLQ is NOT bound to the DLX exchange. This prevents exhausted messages
+    /// from accidentally entering retry queues. When the consumer determines that
+    /// retries are exhausted, it publishes the original message directly to this queue
+    /// or invokes the <see cref="Abstractions.IDeadLetterHandler"/>.
+    /// </para>
+    /// 
+    /// <para>
+    /// When retry is disabled but dead-letter is enabled, the main queue's
+    /// x-dead-letter-exchange is NOT set (see <see cref="DeclareConsumerTopologyAsync"/>).
+    /// In that case, the consumer publishes dead-lettered messages directly to the DLQ.
+    /// </para>
+    /// </summary>
+    private static async Task DeclareDeadLetterQueueAsync(IChannel channel, RabbitConsumerOptions options, ILogger logger, CancellationToken cancellationToken)
+    {
         var dlqName = options.ResolvedDlqName;
 
-        // 1. DLX Exchange (fanout — receives all dead-lettered messages)
-        await channel.ExchangeDeclareAsync(exchange: dlxName, type: "fanout", durable: true, autoDelete: false, cancellationToken: cancellationToken);
+        // DLQ: simple durable queue, not bound to any exchange.
+        // The consumer publishes dead-lettered messages here directly.
+        await channel.QueueDeclareAsync(
+            queue: dlqName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            cancellationToken: cancellationToken);
 
-        // 2. DLQ (final resting place for exhausted messages)
-        await channel.QueueDeclareAsync(queue: dlqName, durable: true, exclusive: false, autoDelete: false, cancellationToken: cancellationToken);
-
-        // Bind DLQ to DLX with queue name as routing key
-        // The dead letter consumer will consume from this queue
-        await channel.QueueBindAsync(queue: dlqName, exchange: dlxName, routingKey: dlqName, cancellationToken: cancellationToken);
-
-        logger.LogInformation("[Consumer:{Key}] Declared DLX '{Dlx}' → DLQ '{Dlq}'", options.ServiceKey, dlxName, dlqName);
-
-        // 3. Retry queues (one per delay)
-        if (options.EnableRetry)
-        {
-            var delays = options.ResolvedRetryDelays;
-
-            for (int i = 0; i < delays.Length; i++)
-            {
-                var delay = delays[i];
-                var retryQueueName = $"{options.QueueName}.retry.{(int)delay.TotalSeconds}s";
-
-                var retryArgs = new Dictionary<string, object?>
-                {
-                    // When TTL expires, message goes back to the main exchange
-                    ["x-dead-letter-exchange"] = options.ExchangeName,
-                    ["x-dead-letter-routing-key"] = options.RoutingKey,
-                };
-
-                if (delay > TimeSpan.Zero)
-                    retryArgs["x-message-ttl"] = (int)delay.TotalMilliseconds;
-
-                await channel.QueueDeclareAsync(queue: retryQueueName, durable: true, exclusive: false, autoDelete: false, arguments: retryArgs, cancellationToken: cancellationToken);
-
-                // Bind retry queue to DLX
-                await channel.QueueBindAsync(queue: retryQueueName, exchange: dlxName, routingKey: retryQueueName, cancellationToken: cancellationToken);
-
-                logger.LogInformation("[Consumer:{Key}] Declared retry queue '{RetryQueue}' (TTL={TTL}ms)", options.ServiceKey, retryQueueName, (int)delay.TotalMilliseconds);
-            }
-        }
+        logger.LogInformation("[Consumer:{Key}] Declared DLQ '{Dlq}' (standalone, not bound to DLX)", options.ServiceKey, dlqName);
     }
 }
