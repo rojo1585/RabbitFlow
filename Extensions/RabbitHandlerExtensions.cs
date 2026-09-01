@@ -44,7 +44,7 @@ namespace RabbitFlow.Extensions
         /// </exception>
         /// <example>
         /// <code>
-        /// services.AddRabbitHandler&lt;OrderCreatedHandler&gt;("orders-consumer");
+        /// services.AddRabbitHandler&lt;SomeCreatedHandler&gt;("some-consumer");
         /// </code>
         /// </example>
         public static IServiceCollection AddRabbitHandler<THandler>(
