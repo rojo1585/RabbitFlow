@@ -18,8 +18,8 @@ namespace RabbitFlow.Extensions;
 /// One health check per connection provides granular visibility:
 /// <code>
 /// builder.Services.AddHealthChecks()
-///     .AddRabbitMq("some")
-///     .AddRabbitMq("some2");
+///     .AddRabbitMq("Some")
+///     .AddRabbitMq("SomeTwo");
 /// </code>
 /// </para>
 /// 
@@ -40,8 +40,8 @@ namespace RabbitFlow.Extensions;
 /// 
 /// // Or individual connections:
 /// builder.Services.AddHealthChecks()
-///     .AddRabbitMq("some")
-///     .AddRabbitMq("some2");
+///     .AddRabbitMq("Some")
+///     .AddRabbitMq("SomeTwo");
 /// </code>
 /// </para>
 /// </summary>
@@ -66,7 +66,12 @@ public static class HealthCheckExtensions
     /// The tag <c>"rabbitmq"</c> is always included.
     /// </param>
     /// <returns>The builder for chaining.</returns>
-    public static IHealthChecksBuilder AddRabbitMq(this IHealthChecksBuilder builder, string connectionName, string? name = null, HealthStatus? failureStatus = null, string[]? tags = null)
+    public static IHealthChecksBuilder AddRabbitMq(
+        this IHealthChecksBuilder builder,
+        string connectionName,
+        string? name = null,
+        HealthStatus? failureStatus = null,
+        string[]? tags = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(connectionName);
@@ -76,7 +81,9 @@ public static class HealthCheckExtensions
 
         return builder.Add(new HealthCheckRegistration(
             name: checkName,
-            factory: sp => new RabbitMqHealthCheck(connectionName,sp.GetRequiredService<IRabbitConnectionRegistry>()),
+            factory: sp => new RabbitMqHealthCheck(
+                connectionName,
+                sp.GetRequiredService<IRabbitConnectionRegistry>()),
             failureStatus: failureStatus,
             tags: allTags));
     }
@@ -103,7 +110,6 @@ public static class HealthCheckExtensions
     /// </param>
     /// <returns>The builder for chaining.</returns>
     /// <remarks>
-    /// Must be called AFTER <c>AddRabbitMQ()</c> so that
     /// <c>IRabbitConnectionRegistry</c> and <c>IOptions&lt;RabbitMqSettings&gt;</c> are registered.
     /// </remarks>
     public static IHealthChecksBuilder AddRabbitMqAll(
@@ -118,7 +124,9 @@ public static class HealthCheckExtensions
 
         return builder.Add(new HealthCheckRegistration(
             name: name ?? "rabbitmq",
-            factory: sp => new RabbitMqAllHealthCheck(sp.GetRequiredService<IRabbitConnectionRegistry>(),sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
+            factory: sp => new RabbitMqAllHealthCheck(
+                sp.GetRequiredService<IRabbitConnectionRegistry>(),
+                sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
             failureStatus: failureStatus,
             tags: allTags));
     }

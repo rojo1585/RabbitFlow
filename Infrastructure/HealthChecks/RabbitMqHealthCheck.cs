@@ -21,8 +21,8 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// Register one health check per connection for granular monitoring:
 /// <code>
 /// builder.Services.AddHealthChecks()
-///     .AddRabbitMq("mercedes")
-///     .AddRabbitMq("evidencias");
+///     .AddRabbitMq("Some")
+///     .AddRabbitMq("SomeTwo");
 /// </code>
 /// </para>
 /// 

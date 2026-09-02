@@ -7,34 +7,37 @@ namespace RabbitFlow.Diagnostics;
 
 
 /// <summary>
-/// Central <see cref="Meter"/> for all Apymsa.RabbitMQ metrics.
+/// Central <see cref="Meter"/> for all RabbitMQ metrics.
 /// 
 /// <para>
 /// Uses the built-in <c>System.Diagnostics.Metrics</c> API (.NET 8+).
 /// Metrics are automatically collected by any OpenTelemetry SDK configured with
-/// <c>AddMeter(RabbitMqMetrics.MeterName)</c>.
+/// <c>AddMeter(MeterName)</c>.
+/// </para>
+/// 
+/// <para>
+/// The <see cref="MeterName"/> is determined at construction time via the
+/// <see cref="RabbitMqBuilder.WithInstrumentationName"/> builder method or
+/// <see cref="Configuration.RabbitMqSettings.InstrumentationName"/> setting.
 /// </para>
 /// 
 /// <para>
 /// <b>Usage in the host:</b>
 /// <code>
-/// builder.Services.AddOpenTelemetry()
+/// services.AddRabbitMQ(configuration);
+/// services.AddOpenTelemetry()
 ///     .WithMetrics(metrics => metrics
 ///         .AddMeter(RabbitMqMetrics.MeterName));
 /// </code>
-/// </para>
-/// 
-/// <para>
-/// All counters include <c>producer_key</c> or <c>consumer_key</c> and
-/// <c>event_type</c> tags for dimensional analysis.
 /// </para>
 /// </summary>
 public sealed class RabbitMqMetrics
 {
     /// <summary>
-    /// The meter name. Consumers must pass this exact string to <c>AddMeter()</c>.
+    /// The meter name resolved at construction time.
+    /// Consumers must pass this exact string to <c>AddMeter()</c>.
     /// </summary>
-    public const string MeterName = "Apymsa.RabbitMQ";
+    public string MeterName { get; }
 
     private readonly Meter _meter;
 
@@ -96,12 +99,16 @@ public sealed class RabbitMqMetrics
     public Histogram<double> PublishDurationMs { get; }
 
     /// <summary>
-    /// Creates a new <see cref="RabbitMqMetrics"/> instance.
+    /// Creates a new <see cref="RabbitMqMetrics"/> instance with the given meter name.
     /// Typically registered as a singleton in DI.
     /// </summary>
-    public RabbitMqMetrics()
+    /// <param name="meterName">
+    /// The instrumentation name. Must match the <see cref="RabbitMqActivitySource.SourceName"/>.
+    /// </param>
+    public RabbitMqMetrics(string meterName)
     {
-        _meter = new Meter(MeterName, "1.0.0");
+        MeterName = meterName;
+        _meter = new Meter(meterName, "1.0.0");
 
         Published = _meter.CreateCounter<long>(
             name: "rabbitmq.published",

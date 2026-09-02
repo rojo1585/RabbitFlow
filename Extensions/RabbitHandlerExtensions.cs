@@ -35,7 +35,7 @@ namespace RabbitFlow.Extensions
         /// The handler class. Must implement <see cref="IRabbitHandler{TEvent}"/> for exactly one event type.
         /// </typeparam>
         /// <param name="consumerKey">
-        /// Must match the <see cref="Apymsa.RabbitMQ.Configuration.RabbitConsumerOptions.ServiceKey"/>
+        /// Must match the <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/>
         /// of the consumer that should dispatch to this handler.
         /// </param>
         /// <exception cref="InvalidOperationException">
@@ -47,10 +47,7 @@ namespace RabbitFlow.Extensions
         /// services.AddRabbitHandler&lt;SomeCreatedHandler&gt;("some-consumer");
         /// </code>
         /// </example>
-        public static IServiceCollection AddRabbitHandler<THandler>(
-            this IServiceCollection services,
-            string consumerKey)
-            where THandler : class
+        public static IServiceCollection AddRabbitHandler<THandler>(this IServiceCollection services, string consumerKey) where THandler : class
         {
             var handlerType = typeof(THandler);
 
@@ -60,17 +57,12 @@ namespace RabbitFlow.Extensions
                 .ToList();
 
             if (handlerInterfaces.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    $"{handlerType.Name} does not implement IRabbitHandler<TEvent>.");
-            }
+                throw new InvalidOperationException($"{handlerType.Name} does not implement IRabbitHandler<TEvent>.");
+
 
             if (handlerInterfaces.Count > 1)
-            {
-                throw new InvalidOperationException(
-                    $"{handlerType.Name} implements IRabbitHandler<TEvent> for multiple event types. " +
-                    $"Use separate handler classes for each event type.");
-            }
+                throw new InvalidOperationException($"{handlerType.Name} implements IRabbitHandler<TEvent> for multiple event types. Use separate handler classes for each event type.");
+
 
             var eventType = handlerInterfaces[0].GetGenericArguments()[0];
 
@@ -97,10 +89,7 @@ namespace RabbitFlow.Extensions
         private static string ResolveEventTypeName(Type eventType)
         {
             var versionAttr = eventType.GetCustomAttribute<EventVersionAttribute>();
-            return versionAttr is not null
-                ? versionAttr.EventName
-                : eventType.FullName ?? throw new InvalidOperationException(
-                    $"Event type '{eventType.Name}' has no FullName (nested/generic types are not supported).");
+            return versionAttr is not null? versionAttr.EventName: eventType.FullName ?? throw new InvalidOperationException($"Event type '{eventType.Name}' has no FullName (nested/generic types are not supported).");
         }
     }
 

@@ -88,7 +88,7 @@ public sealed class RabbitMqBuilder
     }
 
     /// <summary>
-    /// Registers all Apymsa.RabbitMQ services into DI.
+    /// Registers all Some.RabbitMQ services into DI.
     /// Called internally by <c>AddRabbitMQ</c>.
     /// </summary>
     internal void Build()

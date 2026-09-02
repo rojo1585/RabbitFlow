@@ -24,8 +24,8 @@ namespace RabbitFlow.Infrastructure.HealthChecks
     /// The data dictionary includes individual connection statuses for
     /// dashboard visibility:
     /// <code>{
-    ///   "mercedes": "Healthy",
-    ///   "evidencias": "Unhealthy"
+    ///   "Some": "Healthy",
+    ///   "SomeTwo": "Unhealthy"
     /// }</code>
     /// </para>
     /// 
