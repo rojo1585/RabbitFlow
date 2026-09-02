@@ -13,6 +13,7 @@ namespace RabbitFlow.Configuration
     {
         /// <summary>
         /// Unique identifier for this producer.
+        /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync"/>
         /// to target a specific producer when multiple exist.
         /// Must be unique across all producers.
         /// </summary>
@@ -49,7 +50,10 @@ namespace RabbitFlow.Configuration
 
         /// <summary>
         /// Whether to enable publisher confirms for this producer.
-        /// When true, <c>WaitForConfirmsAsync</c> is called after each publish.
+        /// When true, channels are created with <c>CreateChannelOptions(publisherConfirmationsEnabled: true,
+        /// publisherConfirmationTrackingEnabled: true)</c> so that <c>BasicPublishAsync</c> blocks until
+        /// the broker confirms the message. On failure, a <see cref="Exceptions.PublisherNackException"/>
+        /// is thrown. On timeout, a <see cref="Exceptions.PublisherConfirmTimeoutException"/> is thrown.
         /// Defaults to true.
         /// </summary>
         public bool EnablePublisherConfirms { get; init; } = true;
