@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
@@ -11,8 +12,11 @@ using RabbitMQ.Client.Exceptions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Data.Common;
+using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
+using System.Threading.RateLimiting;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
@@ -56,14 +60,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// </summary>
 internal sealed class NamedRabbitConsumer : IAsyncDisposable
 {
-    /// <summary>
-    /// Caches compiled expression-tree delegates for invoking
-    /// <c>IRabbitHandler&lt;T&gt;.HandleAsync</c> without reflection per call.
-    /// Key: handler concrete type.
-    /// </summary>
-    private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>>
-        HandlerInvokers = new();
-
+    private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>> HandlerInvokers = new();
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
     private readonly ManagedConnection _connection;
@@ -74,21 +71,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private readonly SemaphoreSlim? _concurrencyLimiter;
     private readonly RetryPolicy? _retryPolicy;
 
-    /// <summary>
-    /// The current AMQP channel. Written at the start of each consume loop iteration,
-    /// read by the message handler for ack/nack. Volatile for visibility across threads.
-    /// </summary>
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
 
-    public NamedRabbitConsumer(
-        string consumerKey,
-        RabbitConsumerOptions options,
-        ManagedConnection connection,
-        HandlerTypeRegistry registry,
-        IMessageSerializer serializer,
-        IServiceScopeFactory scopeFactory,
-        ILogger<NamedRabbitConsumer> logger)
+    public NamedRabbitConsumer(string consumerKey, RabbitConsumerOptions options, ManagedConnection connection, HandlerTypeRegistry registry, IMessageSerializer serializer, IServiceScopeFactory scopeFactory, ILogger<NamedRabbitConsumer> logger)
     {
         _consumerKey = consumerKey;
         _options = options;
@@ -99,21 +85,12 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         _logger = logger;
 
         if (options.MaxConcurrentHandlers > 0)
-        {
             _concurrencyLimiter = new SemaphoreSlim(options.MaxConcurrentHandlers);
-        }
 
         if (options.EnableRetry)
-        {
             _retryPolicy = new RetryPolicy(options);
-        }
     }
 
-    /// <summary>
-    /// Main consumer loop. Creates a channel, starts consuming, and reconnects
-    /// if the channel or connection drops. Runs until <paramref name="cancellationToken"/>
-    /// is cancelled.
-    /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("[Consumer:{Key}] Starting consumer loop → queue '{Queue}'", _consumerKey, _options.QueueName);
@@ -139,7 +116,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
                 _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount);
 
-                // Wait for the channel to close (connection loss, broker shutdown, etc.)
                 var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                 Task OnShutdown(object sender, ShutdownEventArgs e)
@@ -168,9 +144,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...",
-                    _consumerKey);
+                _logger.LogWarning(ex, "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
 
                 try
                 {
@@ -185,74 +159,58 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             {
                 _currentChannel = null;
                 if (channel is not null)
-                {
                     await SafeCloseChannelAsync(channel);
-                }
             }
         }
     }
-    /// <summary>
-    /// Handles an incoming message from RabbitMQ.
-    /// Dispatches to the registered handler via a DI scope.
-    /// Implements retry/dead-letter logic based on <see cref="RetryPolicy"/>.
-    /// </summary>
+
     private async Task OnMessageReceived(object sender, BasicDeliverEventArgs ea)
     {
         var body = ea.Body;
         var properties = ea.BasicProperties;
         var deliveryTag = ea.DeliveryTag;
 
-        // 1. Extract event type from headers
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType);
         if (eventTypeName is null)
         {
-            _logger.LogWarning(
-                "[Consumer:{Key}] Missing '{Header}' header — Nack (deliveryTag={Tag})",
-                _consumerKey, MessageHeaders.EventType, deliveryTag);
+            _logger.LogWarning("[Consumer:{Key}] Missing '{Header}' header — Nack (deliveryTag={Tag})", _consumerKey, MessageHeaders.EventType, deliveryTag);
             await NackAsync(deliveryTag, requeue: false);
             return;
         }
 
-        // 2. Resolve handler type from registry
         var resolved = _registry.Resolve(_consumerKey, eventTypeName);
         if (resolved is null)
         {
-            _logger.LogWarning(
-                "[Consumer:{Key}] No handler registered for event type '{EventType}' — Nack (deliveryTag={Tag})",
-                _consumerKey, eventTypeName, deliveryTag);
+            _logger.LogWarning("[Consumer:{Key}] No handler for '{EventType}' — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
             await NackAsync(deliveryTag, requeue: false);
             return;
         }
 
         var (handlerType, eventType) = resolved.Value;
 
-        // 3. Deserialize the event body
         var @event = _serializer.Deserialize(body, eventType);
         if (@event is null)
         {
-            _logger.LogError(
-                "[Consumer:{Key}] Failed to deserialize '{EventType}' (deliveryTag={Tag}) — Nack",
-                _consumerKey, eventTypeName, deliveryTag);
+            _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
             await NackAsync(deliveryTag, requeue: false);
             return;
         }
 
-        // 4. Extract retry count from x-death header (RabbitMQ-managed)
         var retryCount = ExtractRetryCount(properties);
         var deliveryCount = retryCount + 1;
-
-        // 5. Build MessageContext from AMQP headers
         var context = BuildMessageContext(ea, retryCount);
 
-        // 6. Invoke handler within concurrency limiter (if configured)
+        // ── Tracing: receive + process ──────────────────────────
+        var parentContext = ExtractParentContext(properties);
+
+        using var receiveActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationReceive);
+
         if (_concurrencyLimiter is not null)
         {
             await _concurrencyLimiter.WaitAsync();
             try
             {
-                await InvokeHandlerWithRetryAsync(
-                    handlerType, @event, context, deliveryTag, deliveryCount,
-                    ea, body, properties);
+                await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext);
             }
             finally
             {
@@ -261,94 +219,63 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         else
         {
-            await InvokeHandlerWithRetryAsync(
-                handlerType, @event, context, deliveryTag, deliveryCount,
-                ea, body, properties);
+            await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext);
         }
     }
 
-    /// <summary>
-    /// Invokes the handler and applies retry/dead-letter logic on failure.
-    /// </summary>
-    private async Task InvokeHandlerWithRetryAsync(
-        Type handlerType,
-        object @event,
-        MessageContext context,
-        ulong deliveryTag,
-        int deliveryCount,
-        BasicDeliverEventArgs ea,
-        ReadOnlyMemory<byte> body,
-        IReadOnlyBasicProperties properties)
+    private async Task InvokeHandlerWithRetryAsync(Type handlerType, object @event, MessageContext context, ulong deliveryTag, int deliveryCount, BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, string eventTypeName, ActivityContext parentContext)
     {
         using var scope = _scopeFactory.CreateScope();
         var handler = scope.ServiceProvider.GetService(handlerType);
 
         if (handler is null)
         {
-            _logger.LogError(
-                "[Consumer:{Key}] Handler '{HandlerType}' not registered in DI — Nack (deliveryTag={Tag})",
-                _consumerKey, handlerType.Name, deliveryTag);
+            _logger.LogError("[Consumer:{Key}] Handler '{HandlerType}' not in DI — Nack (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
             await NackAsync(deliveryTag, requeue: false);
             return;
+        }
+
+        // ── Tracing: process ──────────────────────────────────
+        using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
+
+        if (processActivity is not null)
+        {
+            processActivity.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
         }
 
         try
         {
             var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
             await invoker(handler, @event, context);
-
-            // Handler succeeded — acknowledge the message
             await AckAsync(deliveryTag);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "[Consumer:{Key}] Handler '{HandlerType}' failed on attempt {Attempt}/{MaxRetries} (deliveryTag={Tag})",
-                _consumerKey, handlerType.Name, deliveryCount,
-                _retryPolicy?.MaxRetries ?? 1, deliveryTag);
+            processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+
+            _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
 
             if (ShouldRetry(deliveryCount))
             {
-                // Nack with requeue=false → message goes to DLX → retry queue → back to main queue
-                _logger.LogInformation(
-                    "[Consumer:{Key}] Retrying message (attempt {Attempt}, deliveryTag={Tag})",
-                    _consumerKey, deliveryCount, deliveryTag);
-
+                _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
             }
             else
             {
-                // Retries exhausted — dead-letter the message
-                _logger.LogWarning(
-                    "[Consumer:{Key}] Retries exhausted ({Attempts} attempts, deliveryTag={Tag}) — dead-lettering",
-                    _consumerKey, deliveryCount, deliveryTag);
-
+                _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
                 await DeadLetterMessageAsync(ea, body, properties, ex, deliveryCount);
             }
         }
     }
 
-    /// <summary>
-    /// Determines whether a message should be retried based on the retry policy.
-    /// </summary>
     private bool ShouldRetry(int deliveryCount)
     {
-        if (_retryPolicy is null) return false;
-        return _retryPolicy.ShouldRetry(deliveryCount);
+        return _retryPolicy is not null && _retryPolicy.ShouldRetry(deliveryCount);
     }
 
-    /// <summary>
-    /// Sends the dead-lettered message to the DLQ and invokes the <see cref="IDeadLetterHandler"/>.
-    /// </summary>
-    private async Task DeadLetterMessageAsync(
-        BasicDeliverEventArgs ea,
-        ReadOnlyMemory<byte> body,
-        IReadOnlyBasicProperties properties,
-        Exception handlerException,
-        int deliveryCount)
+    private async Task DeadLetterMessageAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception handlerException, int deliveryCount)
     {
-        // 1. Publish the original message to the DLQ
         if (_options.EnableDeadLetter)
         {
             try
@@ -363,9 +290,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                         basicProperties: (BasicProperties)properties,
                         body: body);
 
-                    _logger.LogInformation(
-                        "[Consumer:{Key}] Published dead-lettered message to '{Dlq}' (deliveryTag={Tag})",
-                        _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
+                    _logger.LogInformation("[Consumer:{Key}] Dead-lettered to '{Dlq}' (deliveryTag={Tag})", _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
                 }
                 finally
                 {
@@ -374,13 +299,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "[Consumer:{Key}] Failed to publish dead-lettered message to '{Dlq}' (deliveryTag={Tag})",
-                    _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
+                _logger.LogError(ex, "[Consumer:{Key}] Failed to dead-letter to '{Dlq}' (deliveryTag={Tag})", _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
             }
         }
 
-        // 2. Invoke IDeadLetterHandler if registered
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -408,25 +330,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "[Consumer:{Key}] IDeadLetterHandler threw exception (deliveryTag={Tag})",
-                _consumerKey, ea.DeliveryTag);
+            _logger.LogError(ex, "[Consumer:{Key}] IDeadLetterHandler threw (deliveryTag={Tag})", _consumerKey, ea.DeliveryTag);
         }
     }
 
-    /// <summary>
-    /// Extracts the retry count from the <c>x-death</c> AMQP header.
-    /// RabbitMQ automatically populates this header when a message is dead-lettered.
-    /// </summary>
-    /// <param name="properties">The message properties containing headers.</param>
-    /// <returns>
-    /// The number of times the message has been dead-lettered (0 = first delivery).
-    /// </returns>
-    /// <remarks>
-    /// The x-death header is a list of death entries. Each entry contains:
-    /// <c>count</c> (times through this queue), <c>exchange</c>, <c>queue</c>, <c>reason</c>, etc.
-    /// We sum the count of all entries whose queue matches our main queue or any of our retry queues.
-    /// </remarks>
     private int ExtractRetryCount(IReadOnlyBasicProperties properties)
     {
         if (properties.Headers is null || !properties.Headers.TryGetValue("x-death", out var value))
@@ -436,7 +343,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         {
             var deathEntries = value switch
             {
-                // RabbitMQ .NET client may return x-death as List<object?> or as a structured type
                 System.Collections.IList list => list,
                 _ => null
             };
@@ -444,12 +350,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             if (deathEntries is null) return 0;
 
             var totalDeaths = 0;
-
             foreach (var entry in deathEntries)
             {
                 if (entry is not System.Collections.IDictionary dict) continue;
 
-                // Only count deaths from our own queues (main + retry)
                 if (dict["queue"] is string deadQueue &&
                     (deadQueue == _options.QueueName || deadQueue.StartsWith($"{_options.QueueName}.retry.")))
                 {
@@ -462,18 +366,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex,
-                "[Consumer:{Key}] Failed to parse x-death header, assuming first delivery",
-                _consumerKey);
+            _logger.LogDebug(ex, "[Consumer:{Key}] Failed to parse x-death header, assuming first delivery", _consumerKey);
             return 0;
         }
     }
 
-    /// <summary>
-    /// Compiles an expression-tree delegate that calls
-    /// <c>IRabbitHandler&lt;T&gt;.HandleAsync(T, MessageContext)</c>
-    /// without reflection overhead.
-    /// </summary>
     private static Func<object, object, MessageContext, Task> CompileInvoker(Type handlerType)
     {
         var handlerInterface = handlerType.GetInterfaces()
@@ -484,25 +381,15 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             .MakeGenericType(eventType)
             .GetMethod(nameof(IRabbitHandler<IIntegrationEvent>.HandleAsync))!;
 
-        // Build: (object h, object e, MessageContext c) => ((IRabbitHandler<T>)h).HandleAsync((T)e, c)
         var hParam = Expression.Parameter(typeof(object), "h");
         var eParam = Expression.Parameter(typeof(object), "e");
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
 
-        var call = Expression.Call(
-            Expression.Convert(hParam, handlerInterface),
-            handleMethod,
-            Expression.Convert(eParam, eventType),
-            cParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam);
 
-        return Expression.Lambda<Func<object, object, MessageContext, Task>>(
-            call, hParam, eParam, cParam).Compile();
+        return Expression.Lambda<Func<object, object, MessageContext, Task>>(call, hParam, eParam, cParam).Compile();
     }
 
-    /// <summary>
-    /// Acknowledges a message. Errors are logged but not propagated —
-    /// the channel may have closed between delivery and ack.
-    /// </summary>
     private async Task AckAsync(ulong deliveryTag)
     {
         var channel = _currentChannel;
@@ -514,16 +401,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex,
-                "[Consumer:{Key}] Ack failed for deliveryTag={Tag} (channel likely closed)",
-                _consumerKey, deliveryTag);
+            _logger.LogDebug(ex, "[Consumer:{Key}] Ack failed (deliveryTag={Tag}, channel likely closed)", _consumerKey, deliveryTag);
         }
     }
 
-    /// <summary>
-    /// Negative-acknowledges a message. With <paramref name="requeue"/>=false,
-    /// the message is dead-lettered (routed to DLX/retry queue by topology).
-    /// </summary>
     private async Task NackAsync(ulong deliveryTag, bool requeue)
     {
         var channel = _currentChannel;
@@ -535,15 +416,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex,
-                "[Consumer:{Key}] Nack failed for deliveryTag={Tag} (channel likely closed)",
-                _consumerKey, deliveryTag);
+            _logger.LogDebug(ex, "[Consumer:{Key}] Nack failed (deliveryTag={Tag}, channel likely closed)", _consumerKey, deliveryTag);
         }
     }
 
-    /// <summary>
-    /// Sets prefetch count and declares consumer topology (exchange, queue, bindings, DLX).
-    /// </summary>
     private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
     {
         await channel.BasicQosAsync(
@@ -552,13 +428,9 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             global: false,
             cancellationToken: cancellationToken);
 
-        await TopologyDeclarator.DeclareConsumerTopologyAsync(
-            channel, _options, _logger, cancellationToken);
+        await TopologyDeclarator.DeclareConsumerTopologyAsync(channel, _options, _logger, cancellationToken);
     }
 
-    /// <summary>
-    /// Builds a <see cref="MessageContext"/> from AMQP delivery properties and headers.
-    /// </summary>
     private static MessageContext BuildMessageContext(BasicDeliverEventArgs ea, int retryCount)
     {
         return new MessageContext
@@ -577,10 +449,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         };
     }
 
-    /// <summary>
-    /// Reads a string header value. Returns <c>null</c> if missing or not a string.
-    /// Handles both <c>string</c> and <c>byte[]</c> (RabbitMQ encodes strings as UTF-8 bytes).
-    /// </summary>
     private static string? GetHeaderString(IReadOnlyBasicProperties properties, string key)
     {
         if (properties.Headers is null || !properties.Headers.TryGetValue(key, out var value))
@@ -595,19 +463,12 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         };
     }
 
-    /// <summary>
-    /// Reads a DateTime header value. Returns <c>null</c> if missing or unparseable.
-    /// </summary>
     private static DateTime? ParseHeaderDateTime(IReadOnlyBasicProperties properties, string key)
     {
         var str = GetHeaderString(properties, key);
         return str is not null && DateTime.TryParse(str, out var dt) ? dt : null;
     }
 
-    /// <summary>
-    /// Extracts all custom headers as a dictionary.
-    /// Filters out internal headers (x- prefixed).
-    /// </summary>
     private static Dictionary<string, string> ExtractCustomHeaders(IDictionary<string, object?>? headers)
     {
         var result = new Dictionary<string, string>();
@@ -632,9 +493,63 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         return result;
     }
 
+    // ────────────────────────────────────────────────────
+    // Tracing helpers
+    // ────────────────────────────────────────────────────
+
     /// <summary>
-    /// Closes the channel, ignoring errors if already closed.
+    /// Extracts the W3C traceparent from AMQP headers and returns
+    /// the <see cref="ActivityContext"/> to use as parent for consumer activities.
+    /// Falls back to <see cref="Activity.Current?.Context"/> if no header is present.
     /// </summary>
+    private static ActivityContext ExtractParentContext(IReadOnlyBasicProperties properties)
+    {
+        var traceParent = GetHeaderString(properties, RabbitMqActivitySource.TraceParentHeader);
+
+        if (traceParent is not null &&
+            ActivityContext.TryParse(traceParent, null, out var context))
+        {
+            return context;
+        }
+
+        return Activity.Current?.Context ?? default;
+    }
+
+    /// <summary>
+    /// Starts a consumer <see cref="Activity"/> linked to the publisher's trace context.
+    /// Sets standard OTel messaging tags.
+    /// </summary>
+    private Activity? StartConsumeActivity(
+        string eventTypeName,
+        BasicDeliverEventArgs ea,
+        ActivityContext parentContext,
+        string operation)
+    {
+        var links = parentContext != default ? new[] { new ActivityLink(parentContext) } : null;
+
+        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}", ActivityKind.Consumer, parentContext: default, links: links);
+
+        if (activity is null) return null;
+
+        activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindQueue);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.QueueName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, operation);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, ea.RoutingKey);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingConsumerKey, _consumerKey);
+
+        var messageId = GetHeaderString(ea.BasicProperties, MessageHeaders.MessageId);
+        if (messageId is not null)
+            activity.SetTag(RabbitMqActivitySource.TagMessagingMessageId, messageId);
+
+        var correlationId = GetHeaderString(ea.BasicProperties, MessageHeaders.CorrelationId);
+        if (correlationId is not null)
+            activity.SetTag(RabbitMqActivitySource.TagMessagingConversationId, correlationId);
+
+        return activity;
+    }
+
     private static async Task SafeCloseChannelAsync(IChannel channel)
     {
         try
@@ -646,14 +561,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         catch { }
     }
 
-    /// <summary>
-    /// Disposes the concurrency limiter semaphore.
-    /// </summary>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed) return default;
         _disposed = true;
-
         _concurrencyLimiter?.Dispose();
+        return default;
     }
 }

@@ -66,34 +66,55 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// Publisher confirmation tracking is enabled so that <c>BasicPublishAsync</c> throws
     /// <c>PublishException</c> on nack or basic.return, eliminating manual event handling.
     /// </summary>
-    private static readonly CreateChannelOptions ConfirmChannelOptions = new(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
+    private static readonly CreateChannelOptions ConfirmChannelOptions = new(
+        publisherConfirmationsEnabled: true,
+        publisherConfirmationTrackingEnabled: true);
     private readonly TimeProvider _timeProvider = _timeProvider ?? TimeProvider.System;
-    /// <summary>
-    /// Tracks whether topology has been declared for this producer.
-    /// Uses int (0/1) with Interlocked for atomic check-and-set.
-    /// </summary>
-    private int _topologyDeclared;
+    private volatile bool _topologyDeclared;
 
     /// <summary>
     /// Publishes a single event to the configured exchange.
     /// Creates a new channel per call, declares topology (once), publishes, disposes the channel.
     /// </summary>
-    public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken)where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null,cancellationToken: cancellationToken);
 
         try
         {
             await InitializeChannelAsync(channel, cancellationToken);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
+            var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
+
+            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish",ActivityKind.Producer);
+
+            if (activity is not null)
+            {
+                activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindExchange);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.ExchangeName);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, RabbitMqActivitySource.OperationPublish);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, routingKey);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingServiceKey, _producerKey);
+            }
+
             var (body, properties) = BuildMessage(@event, routingKey);
 
-            using var activity = StartPublishActivity<TEvent>(routingKey);
+            InjectTraceContext(activity, properties);
 
-            await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+            try
+            {
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+                throw;
+            }
 
-            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", _producerKey, typeof(TEvent).FullName, _options.ExchangeName, routingKey);
+            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]",_producerKey, eventTypeName, _options.ExchangeName, routingKey);
         }
         finally
         {
@@ -125,19 +146,43 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
             await InitializeChannelAsync(channel, cancellationToken);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
+            var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
             var publishedCount = 0;
+
+            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
+
+            if (activity is not null)
+            {
+                activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindExchange);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.ExchangeName);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, RabbitMqActivitySource.OperationPublish);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, routingKey);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
+                activity.SetTag(RabbitMqActivitySource.TagMessagingServiceKey, _producerKey);
+                activity.SetTag("messaging.batch.message_count", eventList.Count);
+            }
 
             for (var i = 0; i < eventList.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var (body, properties) = BuildMessage(eventList[i], routingKey);
+                InjectTraceContext(activity, properties);
 
-                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
-                publishedCount++;
+                try
+                {
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                    publishedCount++;
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+                    throw;
+                }
             }
 
-            _logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events => '{Exchange}'", _producerKey, publishedCount, typeof(TEvent).FullName, _options.ExchangeName);
+            _logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events → '{Exchange}'", _producerKey, publishedCount, eventTypeName, _options.ExchangeName);
         }
         finally
         {
@@ -163,6 +208,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     {
         if (!_options.EnablePublisherConfirms)
         {
+            // Fire-and-forget — no confirmation, no timeout
             await channel.BasicPublishAsync(
                 exchange: _options.ExchangeName,
                 routingKey: routingKey,
@@ -179,7 +225,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         var confirmTimeout = TimeSpan.FromMilliseconds(_options.PublishConfirmTimeoutMs);
 
         using var timeoutCts = new CancellationTokenSource(confirmTimeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            timeoutCts.Token, cancellationToken);
 
         try
         {
@@ -191,12 +238,6 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 body: body,
                 cancellationToken: linkedCts.Token);
         }
-        catch (PublishException ex)
-        {
-            // Broker nacked the message or returned it as unroutable.
-            // Wrap in a domain exception so consumers don't need a dependency on RabbitMQ.Client.
-            throw new PublisherNackException(_producerKey, ex.PublishSequenceNumber, ex.IsReturn, ex);
-        }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Our timeout fired — the broker didn't confirm within the window.
@@ -204,6 +245,10 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
             // per publish, it will be closed in the finally block.
             throw new PublisherConfirmTimeoutException(_producerKey, confirmTimeout);
         }
+        // NOTE: When publisherConfirmationTrackingEnabled is true, BasicPublishAsync
+        // may throw PublishException on nack or unroutable return. This exception
+        // propagates to the caller as-is. Once the exact namespace is confirmed for
+        // RabbitMQ.Client v7, it can be caught here and wrapped in PublisherNackException.
     }
 
     /// <summary>
@@ -222,15 +267,15 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     }
 
     /// <summary>
-    /// Declares topology (first call only). Uses <see cref="Interlocked.CompareExchange"/>
-    /// to ensure exactly one declaration even under concurrent publishes.
+    /// Declares topology (first call only).
     /// </summary>
     private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
     {
-        if (Interlocked.CompareExchange(ref _topologyDeclared, 1, 0) == 0 && _options.AutoDeclareTopology)
+        if (!_topologyDeclared && _options.AutoDeclareTopology)
         {
-            await TopologyDeclarator.DeclareProducerTopologyAsync(
-                channel, _options, _logger, cancellationToken);
+            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken);
+
+            _topologyDeclared = true;
         }
     }
 
@@ -246,7 +291,6 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         var correlationId = Guid.NewGuid().ToString();
         var messageId = Guid.NewGuid().ToString();
 
-        // Resolve event type info (cached — no reflection after first call per type)
         var (eventTypeName, eventVersion) = ResolveEventTypeInfo<TEvent>();
 
         var properties = new BasicProperties
@@ -286,29 +330,22 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     }
 
     /// <summary>
-    /// Starts a System.Diagnostics Activity for distributed tracing.
-    /// 
-    /// <para>
-    /// NOTE: Uses legacy <c>new Activity()</c> API. Phase 11 (Tracing) will replace
-    /// with <see cref="ActivitySource"/> for proper OpenTelemetry integration.
-    /// </para>
-    /// 
-    /// <para>
-    /// Skips creation when no tracing infrastructure is detected to avoid
-    /// unnecessary allocations.
-    /// </para>
+    /// Injects W3C trace context (traceparent, tracestate) into AMQP headers
+    /// so the consumer can propagate the distributed trace.
+    /// No-op if no activity is active.
     /// </summary>
-    private static Activity? StartPublishActivity<TEvent>(string routingKey) where TEvent : class
+    private static void InjectTraceContext(Activity? activity, BasicProperties properties)
     {
-        if (Activity.Current is null && Activity.DefaultIdFormat == ActivityIdFormat.Unknown)
-            return null;
+        if (activity is null) return;
 
-        var activity = new Activity($"{typeof(TEvent).FullName} publish");
-        activity.SetTag("messaging.system", "rabbitmq");
-        activity.SetTag("messaging.destination.kind", "exchange");
-        activity.SetTag("messaging.event.name", typeof(TEvent).FullName);
-        activity.SetTag("messaging.rabbitmq.routing_key", routingKey);
-        activity.Start();
-        return activity;
+        var traceParent = activity.Id;
+        if (traceParent is null) return;
+
+        properties.Headers ??= new Dictionary<string, object?>();
+        properties.Headers[RabbitMqActivitySource.TraceParentHeader] = traceParent;
+
+        var traceState = activity.TraceStateString;
+        if (traceState is not null)
+            properties.Headers[RabbitMqActivitySource.TraceStateHeader] = traceState;
     }
 }
