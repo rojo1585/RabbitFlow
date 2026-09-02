@@ -34,7 +34,7 @@ namespace RabbitFlow.Extensions;
 /// <para>
 /// <b>Usage in Program.cs:</b>
 /// <code>
-/// builder.Services.AddApymsaRabbitMQ(builder.Configuration);
+/// builder.Services.AddRabbitMQ(builder.Configuration);
 /// builder.Services.AddHealthChecks()
 ///     .AddRabbitMqAll();
 /// 
@@ -103,7 +103,7 @@ public static class HealthCheckExtensions
     /// </param>
     /// <returns>The builder for chaining.</returns>
     /// <remarks>
-    /// Must be called AFTER <c>AddApymsaRabbitMQ()</c> so that
+    /// Must be called AFTER <c>AddRabbitMQ()</c> so that
     /// <c>IRabbitConnectionRegistry</c> and <c>IOptions&lt;RabbitMqSettings&gt;</c> are registered.
     /// </remarks>
     public static IHealthChecksBuilder AddRabbitMqAll(

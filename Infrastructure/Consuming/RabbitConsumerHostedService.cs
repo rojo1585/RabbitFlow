@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
+using RabbitFlow.Diagnostics;
 using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
 using System;
@@ -38,6 +39,7 @@ public sealed class RabbitConsumerHostedService(
     IMessageSerializer serializer,
     IServiceScopeFactory scopeFactory,
     ILoggerFactory loggerFactory,
+    RabbitMqMetrics _metrics,
     IOptions<RabbitMqSettings> settings) : BackgroundService
 {
     private readonly RabbitConnectionRegistry _connectionRegistry = connectionRegistry;
@@ -85,7 +87,8 @@ public sealed class RabbitConsumerHostedService(
                 registry: _handlerRegistry,
                 serializer: _serializer,
                 scopeFactory: _scopeFactory,
-                logger: _loggerFactory.CreateLogger<NamedRabbitConsumer>());
+                logger: _loggerFactory.CreateLogger<NamedRabbitConsumer>(),
+                metrics: _metrics);
 
             // Each consumer runs its own reconnect loop
             consumerTasks.Add(consumer.RunAsync(stoppingToken));

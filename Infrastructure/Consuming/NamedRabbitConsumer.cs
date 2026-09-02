@@ -30,29 +30,6 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// </para>
 ///
 /// <para>
-/// Message processing flow:
-/// <list type="number">
-///   <item>Receive message from RabbitMQ (manual ack mode).</item>
-///   <item>Extract <c>x-event-type</c> header → resolve handler type from registry.</item>
-///   <item>Extract retry count from <c>x-death</c> header (RabbitMQ-managed).</item>
-///   <item>Deserialize body to the resolved event type.</item>
-///   <item>Create a fresh DI scope, resolve the handler, call <see cref="IRabbitHandler{T}.HandleAsync"/>.</item>
-///   <item>On success: Ack. On failure: check retry policy → Nack (retry) or dead-letter.</item>
-/// </list>
-/// </para>
-///
-/// <para>
-/// Retry/dead-letter strategy:
-/// <list type="bullet">
-///   <item>If retries remain and retry is enabled: Nack with requeue=false.
-///     RabbitMQ routes the message to the DLX → retry queue (TTL) → back to main queue.</item>
-///   <item>If retries exhausted or retry is disabled: Nack with requeue=false.
-///     The consumer publishes the original message to the DLQ and invokes
-///     <see cref="IDeadLetterHandler"/> if registered.</item>
-/// </list>
-/// </para>
-///
-/// <para>
 /// Concurrency: Controlled by <see cref="RabbitConsumerOptions.PrefetchCount"/> (AMQP level)
 /// and optionally <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> (handler level
 /// via <see cref="SemaphoreSlim"/>).
@@ -61,6 +38,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 internal sealed class NamedRabbitConsumer : IAsyncDisposable
 {
     private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>> HandlerInvokers = new();
+
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
     private readonly ManagedConnection _connection;
@@ -68,13 +46,22 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private readonly IMessageSerializer _serializer;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NamedRabbitConsumer> _logger;
+    private readonly RabbitMqMetrics _metrics;
     private readonly SemaphoreSlim? _concurrencyLimiter;
     private readonly RetryPolicy? _retryPolicy;
 
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
 
-    public NamedRabbitConsumer(string consumerKey, RabbitConsumerOptions options, ManagedConnection connection, HandlerTypeRegistry registry, IMessageSerializer serializer, IServiceScopeFactory scopeFactory, ILogger<NamedRabbitConsumer> logger)
+    public NamedRabbitConsumer(
+        string consumerKey,
+        RabbitConsumerOptions options,
+        ManagedConnection connection,
+        HandlerTypeRegistry registry,
+        IMessageSerializer serializer,
+        IServiceScopeFactory scopeFactory,
+        ILogger<NamedRabbitConsumer> logger,
+        RabbitMqMetrics metrics)
     {
         _consumerKey = consumerKey;
         _options = options;
@@ -83,6 +70,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         _serializer = serializer;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _metrics = metrics;
 
         if (options.MaxConcurrentHandlers > 0)
             _concurrencyLimiter = new SemaphoreSlim(options.MaxConcurrentHandlers);
@@ -144,7 +132,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
+                _logger.LogWarning(ex,
+                    "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
 
                 try
                 {
@@ -223,7 +212,17 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private async Task InvokeHandlerWithRetryAsync(Type handlerType, object @event, MessageContext context, ulong deliveryTag, int deliveryCount, BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, string eventTypeName, ActivityContext parentContext)
+    private async Task InvokeHandlerWithRetryAsync(
+        Type handlerType,
+        object @event,
+        MessageContext context,
+        ulong deliveryTag,
+        int deliveryCount,
+        BasicDeliverEventArgs ea,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        string eventTypeName,
+        ActivityContext parentContext)
     {
         using var scope = _scopeFactory.CreateScope();
         var handler = scope.ServiceProvider.GetService(handlerType);
@@ -238,30 +237,57 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         // ── Tracing: process ──────────────────────────────────
         using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
 
-        if (processActivity is not null)
-        {
-            processActivity.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
-        }
+        processActivity?.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
 
+        var handlerSw = ValueStopwatch.StartNew();
         try
         {
             var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
             await invoker(handler, @event, context);
             await AckAsync(deliveryTag);
+
+            _metrics.ProcessingDurationMs.Record(
+                handlerSw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            _metrics.Consumed.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
         }
         catch (Exception ex)
         {
+            _metrics.ConsumeErrors.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
             processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
 
             _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
 
             if (ShouldRetry(deliveryCount))
             {
+                _metrics.Retried.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagAttempt, deliveryCount));
+
                 _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
             }
             else
             {
+                _metrics.DeadLettered.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
+
                 _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
                 await DeadLetterMessageAsync(ea, body, properties, ex, deliveryCount);
@@ -428,7 +454,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             global: false,
             cancellationToken: cancellationToken);
 
-        await TopologyDeclarator.DeclareConsumerTopologyAsync(channel, _options, _logger, cancellationToken);
+        await TopologyDeclarator.DeclareConsumerTopologyAsync(
+            channel, _options, _logger, cancellationToken);
     }
 
     private static MessageContext BuildMessageContext(BasicDeliverEventArgs ea, int retryCount)
@@ -491,6 +518,22 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// High-performance stopwatch that avoids <see cref="Stopwatch"/>
+    /// allocation. Returns elapsed milliseconds as double.
+    /// </summary>
+    private readonly struct ValueStopwatch
+    {
+        private readonly long _startTimestamp;
+
+        private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
+
+        public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+
+        public double GetElapsedMilliseconds() =>
+            Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
     }
 
     // ────────────────────────────────────────────────────

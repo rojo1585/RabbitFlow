@@ -53,6 +53,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                                            ManagedConnection _connection,
                                            IMessageSerializer _serializer,
                                            ILogger<NamedRabbitPublisher> _logger,
+                                           RabbitMqMetrics _metrics,
                                            TimeProvider? _timeProvider = null)
 {
     /// <summary>
@@ -76,9 +77,9 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// Publishes a single event to the configured exchange.
     /// Creates a new channel per call, declares topology (once), publishes, disposes the channel.
     /// </summary>
-    public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken)where TEvent : class
+    public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null,cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
 
         try
         {
@@ -87,7 +88,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
 
-            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish",ActivityKind.Producer);
+            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
 
             if (activity is not null)
             {
@@ -104,17 +105,36 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
             InjectTraceContext(activity, properties);
 
+            var sw = ValueStopwatch.StartNew();
             try
             {
                 await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
             }
             catch (Exception ex)
             {
+                _metrics.PublishErrors.Add(1,
+                    new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName));
+
                 activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
                 throw;
             }
 
-            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]",_producerKey, eventTypeName, _options.ExchangeName, routingKey);
+            _metrics.PublishDurationMs.Record(
+                sw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+            _metrics.Published.Add(1,
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+            _logger.LogDebug(
+                "[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]",
+                _producerKey, eventTypeName, _options.ExchangeName, routingKey);
         }
         finally
         {
@@ -163,6 +183,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 activity.SetTag("messaging.batch.message_count", eventList.Count);
             }
 
+            var batchSw = ValueStopwatch.StartNew();
+
             for (var i = 0; i < eventList.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -177,10 +199,26 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 }
                 catch (Exception ex)
                 {
+                    _metrics.PublishErrors.Add(1,
+                        new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName));
+
                     activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
                     throw;
                 }
             }
+
+            _metrics.Published.Add(publishedCount,
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+            _metrics.PublishDurationMs.Record(
+                batchSw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
 
             _logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events → '{Exchange}'", _producerKey, publishedCount, eventTypeName, _options.ExchangeName);
         }
@@ -320,7 +358,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// Results are cached per <see cref="Type"/> — reflection runs only once.
     /// Falls back to <c>Type.FullName</c> and version 1 if no attribute is present.
     /// </summary>
-    private static (string EventTypeName, int EventVersion) ResolveEventTypeInfo<TEvent>() where TEvent : class
+    private static (string EventTypeName, int EventVersion) ResolveEventTypeInfo<TEvent>()
+        where TEvent : class
     {
         return EventTypeCache.GetOrAdd(typeof(TEvent), static type =>
         {
@@ -347,5 +386,21 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         var traceState = activity.TraceStateString;
         if (traceState is not null)
             properties.Headers[RabbitMqActivitySource.TraceStateHeader] = traceState;
+    }
+
+    /// <summary>
+    /// High-performance stopwatch that avoids <see cref="System.Diagnostics.Stopwatch"/>
+    /// allocation. Returns elapsed milliseconds as double.
+    /// </summary>
+    private readonly struct ValueStopwatch
+    {
+        private readonly long _startTimestamp;
+
+        private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
+
+        public static ValueStopwatch StartNew() => new(System.Diagnostics.Stopwatch.GetTimestamp());
+
+        public double GetElapsedMilliseconds() =>
+            System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
     }
 }

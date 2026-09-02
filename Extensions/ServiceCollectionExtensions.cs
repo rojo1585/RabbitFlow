@@ -9,14 +9,14 @@ namespace RabbitFlow.Extensions;
 
 
 /// <summary>
-/// Extension methods for registering Apymsa.RabbitMQ services.
+/// Extension methods for registering RabbitMQ services.
 /// </summary>
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers all Apymsa.RabbitMQ services from <see cref="IConfiguration"/>.
+    /// Registers all RabbitMQ services from <see cref="IConfiguration"/>.
     /// </summary>
-    public static IServiceCollection AddApymsaRabbitMQ(this IServiceCollection services, IConfiguration configuration, string? sectionName = null, Action<RabbitMqBuilder>? configure = null)
+    public static IServiceCollection AddFluentRabbitMQ(this IServiceCollection services, IConfiguration configuration, string? sectionName = null, Action<RabbitMqBuilder>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -33,9 +33,9 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers all Apymsa.RabbitMQ services with code-based configuration.
+    /// Registers all RabbitMQ services with code-based configuration.
     /// </summary>
-    public static IServiceCollection AddApymsaRabbitMQ(this IServiceCollection services, Action<RabbitMqSettings> configureSettings, Action<RabbitMqBuilder>? configureBuilder = null)
+    public static IServiceCollection AddFluentRabbitMQ(this IServiceCollection services, Action<RabbitMqSettings> configureSettings, Action<RabbitMqBuilder>? configureBuilder = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configureSettings);
