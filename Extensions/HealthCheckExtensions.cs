@@ -47,88 +47,82 @@ namespace RabbitFlow.Extensions;
 /// </summary>
 public static class HealthCheckExtensions
 {
-    /// <summary>
-    /// Adds a health check for a specific named RabbitMQ connection.
-    /// </summary>
-    /// <param name="builder">The health checks builder.</param>
-    /// <param name="connectionName">
-    /// The connection name as defined in <c>RabbitMqSettings.Connections</c>.
-    /// </param>
-    /// <param name="name">
-    /// The health check registration name. Defaults to <c>rabbitmq-{connectionName}</c>.
-    /// </param>
-    /// <param name="failureStatus">
-    /// The status to report when the connection is unhealthy.
-    /// Defaults to <see cref="HealthStatus.Unhealthy"/>.
-    /// </param>
-    /// <param name="tags">
-    /// Optional tags for filtering in health check UI endpoints.
-    /// The tag <c>"rabbitmq"</c> is always included.
-    /// </param>
-    /// <returns>The builder for chaining.</returns>
-    public static IHealthChecksBuilder AddRabbitMq(
-        this IHealthChecksBuilder builder,
-        string connectionName,
-        string? name = null,
-        HealthStatus? failureStatus = null,
-        string[]? tags = null)
+    extension(IHealthChecksBuilder builder)
     {
-        ArgumentNullException.ThrowIfNull(builder);
-        ArgumentNullException.ThrowIfNull(connectionName);
+        /// <summary>
+        /// Adds a health check for a specific named RabbitMQ connection.
+        /// </summary>
+        /// <param name="builder">The health checks builder.</param>
+        /// <param name="connectionName">
+        /// The connection name as defined in <c>RabbitMqSettings.Connections</c>.
+        /// </param>
+        /// <param name="name">
+        /// The health check registration name. Defaults to <c>rabbitmq-{connectionName}</c>.
+        /// </param>
+        /// <param name="failureStatus">
+        /// The status to report when the connection is unhealthy.
+        /// Defaults to <see cref="HealthStatus.Unhealthy"/>.
+        /// </param>
+        /// <param name="tags">
+        /// Optional tags for filtering in health check UI endpoints.
+        /// The tag <c>"rabbitmq"</c> is always included.
+        /// </param>
+        /// <returns>The builder for chaining.</returns>
+        public IHealthChecksBuilder AddRabbitMq(string connectionName, string? name = null, HealthStatus? failureStatus = null, string[]? tags = null)
+        {
+            ArgumentNullException.ThrowIfNull(builder);
+            ArgumentNullException.ThrowIfNull(connectionName);
 
-        var checkName = name ?? $"rabbitmq-{connectionName}";
-        var allTags = MergeTags(tags, "rabbitmq");
+            var checkName = name ?? $"rabbitmq-{connectionName}";
+            var allTags = MergeTags(tags, "rabbitmq");
 
-        return builder.Add(new HealthCheckRegistration(
-            name: checkName,
-            factory: sp => new RabbitMqHealthCheck(
-                connectionName,
-                sp.GetRequiredService<IRabbitConnectionRegistry>()),
-            failureStatus: failureStatus,
-            tags: allTags));
-    }
+            return builder.Add(new HealthCheckRegistration(
+                name: checkName,
+                factory: sp => new RabbitMqHealthCheck(
+                    connectionName,
+                    sp.GetRequiredService<IRabbitConnectionRegistry>()),
+                failureStatus: failureStatus,
+                tags: allTags));
+        }
 
-    /// <summary>
-    /// Registers a single health check that reports on ALL configured RabbitMQ connections.
-    /// 
-    /// <para>
-    /// Returns <see cref="HealthStatus.Healthy"/> if all connections are open,
-    /// <see cref="HealthStatus.Unhealthy"/> if any are closed.
-    /// The response data includes per-connection status for dashboard visibility.
-    /// </para>
-    /// </summary>
-    /// <param name="builder">The health checks builder.</param>
-    /// <param name="name">
-    /// The health check name. Defaults to <c>"rabbitmq"</c>.
-    /// </param>
-    /// <param name="failureStatus">
-    /// The status to report when any connection is unhealthy.
-    /// Defaults to <see cref="HealthStatus.Unhealthy"/>.
-    /// </param>
-    /// <param name="tags">
-    /// Additional tags. The tag <c>"rabbitmq"</c> is always included.
-    /// </param>
-    /// <returns>The builder for chaining.</returns>
-    /// <remarks>
-    /// <c>IRabbitConnectionRegistry</c> and <c>IOptions&lt;RabbitMqSettings&gt;</c> are registered.
-    /// </remarks>
-    public static IHealthChecksBuilder AddRabbitMqAll(
-        this IHealthChecksBuilder builder,
-        string? name = null,
-        HealthStatus? failureStatus = null,
-        string[]? tags = null)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
+        /// <summary>
+        /// Registers a single health check that reports on ALL configured RabbitMQ connections.
+        /// 
+        /// <para>
+        /// Returns <see cref="HealthStatus.Healthy"/> if all connections are open,
+        /// <see cref="HealthStatus.Unhealthy"/> if any are closed.
+        /// The response data includes per-connection status for dashboard visibility.
+        /// </para>
+        /// </summary>
+        /// <param name="builder">The health checks builder.</param>
+        /// <param name="name">
+        /// The health check name. Defaults to <c>"rabbitmq"</c>.
+        /// </param>
+        /// <param name="failureStatus">
+        /// The status to report when any connection is unhealthy.
+        /// Defaults to <see cref="HealthStatus.Unhealthy"/>.
+        /// </param>
+        /// <param name="tags">
+        /// Additional tags. The tag <c>"rabbitmq"</c> is always included.
+        /// </param>
+        /// <returns>The builder for chaining.</returns>
+        /// <remarks>
+        /// <c>IRabbitConnectionRegistry</c> and <c>IOptions&lt;RabbitMqSettings&gt;</c> are registered.
+        /// </remarks>
+        public IHealthChecksBuilder AddRabbitMqAll(string? name = null, HealthStatus? failureStatus = null, string[]? tags = null)
+        {
+            ArgumentNullException.ThrowIfNull(builder);
 
-        var allTags = MergeTags(tags, "rabbitmq");
+            var allTags = MergeTags(tags, "rabbitmq");
 
-        return builder.Add(new HealthCheckRegistration(
-            name: name ?? "rabbitmq",
-            factory: sp => new RabbitMqAllHealthCheck(
-                sp.GetRequiredService<IRabbitConnectionRegistry>(),
-                sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
-            failureStatus: failureStatus,
-            tags: allTags));
+            return builder.Add(new HealthCheckRegistration(
+                name: name ?? "rabbitmq",
+                factory: sp => new RabbitMqAllHealthCheck(
+                    sp.GetRequiredService<IRabbitConnectionRegistry>(),
+                    sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
+                failureStatus: failureStatus,
+                tags: allTags));
+        }
     }
 
     /// <summary>
