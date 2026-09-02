@@ -519,11 +519,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// Starts a consumer <see cref="Activity"/> linked to the publisher's trace context.
     /// Sets standard OTel messaging tags.
     /// </summary>
-    private Activity? StartConsumeActivity(
-        string eventTypeName,
-        BasicDeliverEventArgs ea,
-        ActivityContext parentContext,
-        string operation)
+    private Activity? StartConsumeActivity(string eventTypeName, BasicDeliverEventArgs ea, ActivityContext parentContext, string operation)
     {
         var links = parentContext != default ? new[] { new ActivityLink(parentContext) } : null;
 
