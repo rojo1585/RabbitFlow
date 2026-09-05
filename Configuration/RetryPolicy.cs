@@ -12,6 +12,14 @@ namespace RabbitFlow.Configuration
     /// <remarks>
     /// Creates a retry policy from consumer options.
     /// </remarks>
+
+    /// <summary>
+    /// Defines retry behavior for a consumer.
+    /// Built from <see cref="RabbitConsumerOptions"/> retry settings.
+    /// </summary>
+    /// <remarks>
+    /// Creates a retry policy from consumer options.
+    /// </remarks>
     public sealed class RetryPolicy(RabbitConsumerOptions options)
     {
 
@@ -38,7 +46,7 @@ namespace RabbitFlow.Configuration
         /// </returns>
         public bool ShouldRetry(int deliveryCount)
         {
-            return deliveryCount < MaxRetries;
+            return deliveryCount <= MaxRetries;
         }
 
         /// <summary>

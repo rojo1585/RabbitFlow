@@ -5,10 +5,11 @@ using System.Text;
 namespace RabbitFlow.Configuration
 {
 
+
     /// <summary>
     /// Defines a message consumer bound to a specific queue, exchange, and connection.
     /// The <see cref="ServiceKey"/> is used to map <see cref="Abstractions.IRabbitHandler{T}"/>
-    /// implementations to the correct consumer.
+    /// or <see cref="Abstractions.IBatchRabbitHandler{T}"/> implementations to the correct consumer.
     /// </summary>
     public sealed class RabbitConsumerOptions
     {
@@ -53,6 +54,10 @@ namespace RabbitFlow.Configuration
         /// Controls the prefetch window to prevent the consumer from being overwhelmed.
         /// Defaults to 10.
         /// </summary>
+        /// <remarks>
+        /// For batch consumers, this should be >= <see cref="BatchSize"/> to ensure
+        /// enough messages are pre-fetched to fill batches efficiently.
+        /// </remarks>
         public ushort PrefetchCount { get; init; } = 10;
 
         /// <summary>
@@ -63,6 +68,10 @@ namespace RabbitFlow.Configuration
         /// Useful when handlers call external APIs and you want to limit concurrency.
         /// Defaults to 0 (unlimited).
         /// </summary>
+        /// <remarks>
+        /// Not applicable when <see cref="EnableBatchConsumer"/> is true — batch consumers
+        /// process one batch at a time.
+        /// </remarks>
         public int MaxConcurrentHandlers { get; init; } = 0;
 
         // ─── Dead Letter Settings ──────────────────────────────────────────
@@ -112,6 +121,49 @@ namespace RabbitFlow.Configuration
         /// </summary>
         public TimeSpan[]? RetryDelays { get; init; }
 
+        // ─── Batch Consumer Settings ──────────────────────────────────────
+
+        /// <summary>
+        /// Whether this consumer operates in batch mode.
+        /// When true, the consumer requires an <see cref="Abstractions.IBatchRabbitHandler{TEvent}"/>
+        /// to be registered instead of (or in addition to) <see cref="Abstractions.IRabbitHandler{TEvent}"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// In batch mode, messages are buffered until either:
+        /// <list type="bullet">
+        ///   <item><see cref="BatchSize"/> messages have arrived, or</item>
+        ///   <item><see cref="BatchTimeoutMs"/> milliseconds have elapsed since the first message in the batch.</item>
+        /// </list>
+        /// The batch is then dispatched to the <see cref="Abstractions.IBatchRabbitHandler{TEvent}.HandleBatchAsync"/> method.
+        /// </para>
+        /// <para>
+        /// All-or-nothing ACK: if the batch handler throws, ALL messages in the batch are NACKed.
+        /// Partial failure handling is the handler's responsibility.
+        /// </para>
+        /// <para>
+        /// When false (default), each message is dispatched individually to <see cref="Abstractions.IRabbitHandler{TEvent}"/>.
+        /// </para>
+        /// </remarks>
+        public bool EnableBatchConsumer { get; init; }
+
+        /// <summary>
+        /// Maximum number of messages to buffer before flushing the batch.
+        /// The batch is dispatched immediately when this count is reached.
+        /// Only used when <see cref="EnableBatchConsumer"/> is true.
+        /// Defaults to 10.
+        /// </summary>
+        public int BatchSize { get; init; } = 10;
+
+        /// <summary>
+        /// Maximum time in milliseconds to wait for the batch to fill before flushing.
+        /// When the timer fires, all buffered messages are dispatched as a batch,
+        /// even if <see cref="BatchSize"/> has not been reached.
+        /// Only used when <see cref="EnableBatchConsumer"/> is true.
+        /// Defaults to 5000 (5 seconds).
+        /// </summary>
+        public int BatchTimeoutMs { get; init; } = 5000;
+
         // ─── Topology ─────────────────────────────────────────────────────
 
         /// <summary>
@@ -134,12 +186,7 @@ namespace RabbitFlow.Configuration
 
         /// <summary>
         /// Resolved retry delays (falls back to default if not explicitly set).
-        /// The default delays are [5s, 30s] — two delays for 3 total attempts.
-        /// The first retry has no delay (handled by immediate requeue or zero-TTL queue).
-        /// Lazily cached to avoid repeated array allocation.
         /// </summary>
-        internal TimeSpan[] ResolvedRetryDelays => _resolvedRetryDelays ??= RetryDelays ?? [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30)];
-
-        private TimeSpan[]? _resolvedRetryDelays;
+        internal TimeSpan[] ResolvedRetryDelays => RetryDelays ?? [TimeSpan.Zero, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30)];
     }
 }

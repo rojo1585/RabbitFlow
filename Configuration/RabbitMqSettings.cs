@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Text;
 
 namespace RabbitFlow.Configuration;
-
 /// <summary>
 /// Root configuration model bound from appsettings.json.
 /// Contains all connections, producers, and consumers definitions.
@@ -13,16 +12,16 @@ namespace RabbitFlow.Configuration;
 /// <code>
 /// {
 ///   "RabbitMQ": {
-///     "InstrumentationName": "Some.RabbitMQ",
+///     "InstrumentationName": "MiEmpresa.RabbitMQ",
 ///     "Connections": {
-///       "Some": { "HostName": "...", "UserName": "...", ... },
-///       "SomeTwo": { "HostName": "...", "UserName": "...", ... }
+///       "mercedes": { "HostName": "...", "UserName": "...", ... },
+///       "evidencias": { "HostName": "...", "UserName": "...", ... }
 ///     },
 ///     "Producers": [
-///       { "ServiceKey": "some-service", "ConnectionName": "some", ... }
+///       { "ServiceKey": "uber-delivered", "ConnectionName": "mercedes", ... }
 ///     ],
 ///     "Consumers": [
-///       { "ServiceKey": "some-consumer", "ConnectionName": "some", ... }
+///       { "ServiceKey": "uber-consumer", "ConnectionName": "mercedes", ... }
 ///     ]
 ///   }
 /// }
