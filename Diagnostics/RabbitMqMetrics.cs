@@ -98,6 +98,22 @@ public sealed class RabbitMqMetrics
     /// </summary>
     public Histogram<double> PublishDurationMs { get; }
 
+    // ────────────────────────────────────────────────
+    // Batch Consumer Metrics
+    // ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Number of batches dispatched by batch consumers.
+    /// <para>Tags: <c>consumer_key</c>, <c>event_type</c>, <c>queue</c>, <c>flush_reason</c></para>
+    /// </summary>
+    public Counter<long> BatchesDispatched { get; }
+
+    /// <summary>
+    /// Size of each dispatched batch (histogram).
+    /// <para>Tags: <c>consumer_key</c>, <c>event_type</c>, <c>queue</c></para>
+    /// </summary>
+    public Histogram<int> BatchSize { get; }
+
     /// <summary>
     /// Creates a new <see cref="RabbitMqMetrics"/> instance with the given meter name.
     /// Typically registered as a singleton in DI.
@@ -149,6 +165,16 @@ public sealed class RabbitMqMetrics
             name: "rabbitmq.publish_duration_ms",
             unit: "ms",
             description: "Duration of publish operation in milliseconds.");
+
+        BatchesDispatched = _meter.CreateCounter<long>(
+            name: "rabbitmq.batches_dispatched",
+            unit: "{batch}",
+            description: "Number of batches dispatched by batch consumers.");
+
+        BatchSize = _meter.CreateHistogram<int>(
+            name: "rabbitmq.batch_size",
+            unit: "{message}",
+            description: "Size of each dispatched batch.");
     }
 
     /// <summary>
@@ -183,4 +209,7 @@ public sealed class RabbitMqMetrics
 
     /// <summary>Tag: the dead-letter queue name.</summary>
     public const string TagDlqName = "dlq_name";
+
+    /// <summary>Tag: why the batch was flushed ("size" or "timeout").</summary>
+    public const string TagFlushReason = "flush_reason";
 }

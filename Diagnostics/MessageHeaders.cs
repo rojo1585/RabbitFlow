@@ -5,6 +5,7 @@ using System.Text;
 namespace RabbitFlow.Diagnostics
 {
 
+
     /// <summary>
     /// Standard header names injected by the publisher and extracted by the consumer.
     /// These are stored as AMQP message headers (string keys, object values).
