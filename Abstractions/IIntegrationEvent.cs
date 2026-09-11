@@ -12,10 +12,5 @@ namespace RabbitFlow.Abstractions
     /// to distinguish integration events from other message types.
     /// </para>
     /// </summary>
-    /// <example>
-    /// <code>
-    /// public record OrderCreatedEvent(Guid OrderId, string CustomerEmail) : IIntegrationEvent;
-    /// </code>
-    /// </example>
     public interface IIntegrationEvent;
 }

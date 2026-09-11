@@ -9,21 +9,6 @@ namespace RabbitFlow.Abstractions
     /// Wrapper structure serialized into the message body.
     /// Separates metadata (event type, version, tracing) from the payload,
     /// allowing the consumer to deserialize without prior knowledge of the type.
-    /// <para>
-    /// JSON structure:
-    /// <code>
-    /// {
-    ///   "eventType": "OrderCreatedEvent",
-    ///   "eventVersion": 1,
-    ///   "correlationId": "550e8400-e29b-41d4-a716-446655440000",
-    ///   "messageId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-    ///   "publishedAt": "2025-01-15T10:30:00Z",
-    ///   "publisherName": "order-service",
-    ///   "payload": { ... }
-    /// }
-    /// </code>
-    /// </para>
-    /// </summary>
     public sealed class MessageEnvelope
     {
         /// <summary>

@@ -4,27 +4,10 @@ using System.Text.Json.Serialization;
 
 namespace RabbitFlow.Infrastructure.Serializartion;
 
-
 /// <summary>
 /// Default message serializer using System.Text.Json.
 /// Wraps event payloads in a <see cref="MessageEnvelope"/> for type-safe deserialization.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The envelope wraps every message with an <c>EventType</c> field. However, the
-/// consumer resolves event types from the <c>x-event-type</c> AMQP header (set by
-/// the publisher), not from the envelope. The envelope exists for:
-/// <list type="bullet">
-///   <item>Backward compatibility with consumers that read the body directly.</item>
-///   <item>Human readability when inspecting raw messages.</item>
-/// </list>
-/// </para>
-/// <para>
-/// NOTE: The <c>EventVersion</c> in the envelope always defaults to 1. The correct
-/// version is in the AMQP header <c>x-event-version</c>. This will be aligned in
-/// Phase 13 (Event Versioning) when the wire format is revisited.
-/// </para>
-/// </remarks>
 public sealed class SystemTextJsonSerializer : IMessageSerializer
 {
     private readonly JsonSerializerOptions _options;
@@ -64,26 +47,22 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
     /// <inheritdoc/>
     public T? Deserialize<T>(ReadOnlyMemory<byte> data)
     {
-        var result = DeserializeWithPayload(data);
-        if (result is null) return default;
+        var envelope = DeserializeEnvelope(data);
+        if (envelope?.Payload is null) return default;
 
-        var (envelope, element) = result.Value;
-        if (envelope is null || element.ValueKind == JsonValueKind.Undefined) return default;
-
-        return element.Deserialize<T>(_options);
+        // Payload comes back as JsonElement (System.Text.Json doesn't know the type)
+        var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
+        return JsonSerializer.Deserialize<T>(payloadJson, _options);
     }
 
     /// <inheritdoc/>
     public object? Deserialize(ReadOnlyMemory<byte> data, Type type)
     {
-        var result = DeserializeWithPayload(data);
-        if (result is null) return null;
+        var envelope = DeserializeEnvelope(data);
+        if (envelope?.Payload is null) return null;
 
-        var (envelope, element) = result.Value;
-        if (envelope is null || element.ValueKind == JsonValueKind.Undefined) return null;
-
-        var rawJson = element.GetRawText();
-        return JsonSerializer.Deserialize(rawJson, type, _options);
+        var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
+        return JsonSerializer.Deserialize(payloadJson, type, _options);
     }
 
     /// <summary>
@@ -111,11 +90,8 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         if (envelope is null) return null;
 
         if (envelope.Payload is JsonElement element)
-        {
             return (envelope, element);
-        }
 
-        // Payload was not a JsonElement (edge case), serialize and re-parse
         var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
         var element2 = JsonSerializer.Deserialize<JsonElement>(payloadJson);
         return (envelope, element2);

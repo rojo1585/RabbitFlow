@@ -16,23 +16,6 @@ namespace RabbitFlow.Abstractions
     /// The type is automatically registered in the event type registry
     /// when the handler is discovered via DI.
     /// </typeparam>
-    /// <example>
-    /// <code>
-    /// public class OrderCreatedHandler : IRabbitHandler&lt;OrderCreatedEvent&gt;
-    /// {
-    ///     public string ConsumerKey => "orders-consumer";
-    ///     private readonly IMediator _mediator;
-    ///     
-    ///     public OrderCreatedHandler(IMediator mediator) => _mediator = mediator;
-    ///     
-    ///     public async Task HandleAsync(OrderCreatedEvent @event, MessageContext context)
-    ///     {
-    ///         // Access tracing info via context.CorrelationId, context.RetryCount, etc.
-    ///         await _mediator.Send(new ProcessOrderCommand(@event.OrderId));
-    ///     }
-    /// }
-    /// </code>
-    /// </example>
     public interface IRabbitHandler<TEvent> where TEvent : class
     {
         /// <summary>

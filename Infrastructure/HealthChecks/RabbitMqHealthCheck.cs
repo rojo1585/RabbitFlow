@@ -21,8 +21,8 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// Register one health check per connection for granular monitoring:
 /// <code>
 /// builder.Services.AddHealthChecks()
-///     .AddRabbitMq("mercedes")
-///     .AddRabbitMq("evidencias");
+///     .AddRabbitMq("some")
+///     .AddRabbitMq("someTwo");
 /// </code>
 /// </para>
 /// 
@@ -30,7 +30,7 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// The check is lightweight — it reads a volatile boolean from
 /// <see cref="IRabbitConnectionRegistry.IsConnected"/>. It does NOT
 /// create a channel or send a heartbeat. The underlying
-/// <see cref="Infrastructure.Connection.ManagedConnection"/>
+/// <see cref="Connection.ManagedConnection"/>
 /// uses AMQP heartbeats to detect broken connections and updates the
 /// state automatically.
 /// </para>
@@ -38,23 +38,24 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// <remarks>
 /// Creates a health check for a specific connection.
 /// </remarks>
-/// <param name="connectionName">
+/// <param name="_connectionName">
 /// The connection name as defined in <c>RabbitMqSettings.Connections</c>.
 /// </param>
-/// <param name="registry">The connection registry to query.</param>
-public sealed class RabbitMqHealthCheck(string connectionName, IRabbitConnectionRegistry registry) : IHealthCheck
+/// <param name="_registry">The connection registry to query.</param>
+public sealed class RabbitMqHealthCheck(string _connectionName, IRabbitConnectionRegistry _registry) : IHealthCheck
 {
-    private readonly string _connectionName = connectionName ?? throw new ArgumentNullException(nameof(connectionName));
-    private readonly IRabbitConnectionRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    private readonly string _connectionName = _connectionName ?? throw new ArgumentNullException(nameof(_connectionName));
+    private readonly IRabbitConnectionRegistry _registry = _registry ?? throw new ArgumentNullException(nameof(_registry));
 
     /// <inheritdoc/>
-    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context,CancellationToken cancellationToken = default)
+    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (_registry.IsConnected(_connectionName))
+        {
             return Task.FromResult(HealthCheckResult.Healthy($"Connection '{_connectionName}' is open."));
-        
+        }
 
         return Task.FromResult(HealthCheckResult.Unhealthy($"Connection '{_connectionName}' is closed or reconnecting."));
     }

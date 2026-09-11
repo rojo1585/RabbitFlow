@@ -6,6 +6,7 @@ using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Topology;
+using RabbitFlow.Infrastructure.Versioning;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
@@ -30,29 +31,6 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// </para>
 ///
 /// <para>
-/// Message processing flow:
-/// <list type="number">
-///   <item>Receive message from RabbitMQ (manual ack mode).</item>
-///   <item>Extract <c>x-event-type</c> header → resolve handler type from registry.</item>
-///   <item>Extract retry count from <c>x-death</c> header (RabbitMQ-managed).</item>
-///   <item>Deserialize body to the resolved event type.</item>
-///   <item>Create a fresh DI scope, resolve the handler, call <see cref="IRabbitHandler{T}.HandleAsync"/>.</item>
-///   <item>On success: Ack. On failure: check retry policy → Nack (retry) or dead-letter.</item>
-/// </list>
-/// </para>
-///
-/// <para>
-/// Retry/dead-letter strategy:
-/// <list type="bullet">
-///   <item>If retries remain and retry is enabled: Nack with requeue=false.
-///     RabbitMQ routes the message to the DLX → retry queue (TTL) → back to main queue.</item>
-///   <item>If retries exhausted or retry is disabled: Nack with requeue=false.
-///     The consumer publishes the original message to the DLQ and invokes
-///     <see cref="IDeadLetterHandler"/> if registered.</item>
-/// </list>
-/// </para>
-///
-/// <para>
 /// Concurrency: Controlled by <see cref="RabbitConsumerOptions.PrefetchCount"/> (AMQP level)
 /// and optionally <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> (handler level
 /// via <see cref="SemaphoreSlim"/>).
@@ -61,28 +39,40 @@ namespace RabbitFlow.Infrastructure.Consuming;
 internal sealed class NamedRabbitConsumer : IAsyncDisposable
 {
     private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>> HandlerInvokers = new();
+
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
     private readonly ManagedConnection _connection;
     private readonly HandlerTypeRegistry _registry;
+    private readonly EventUpgraderRegistry? _upgraderRegistry;
     private readonly IMessageSerializer _serializer;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NamedRabbitConsumer> _logger;
+    private readonly RabbitMqMetrics _metrics;
     private readonly SemaphoreSlim? _concurrencyLimiter;
     private readonly RetryPolicy? _retryPolicy;
-
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
 
-    public NamedRabbitConsumer(string consumerKey, RabbitConsumerOptions options, ManagedConnection connection, HandlerTypeRegistry registry, IMessageSerializer serializer, IServiceScopeFactory scopeFactory, ILogger<NamedRabbitConsumer> logger)
+    public NamedRabbitConsumer(string consumerKey,
+                               RabbitConsumerOptions options,
+                               ManagedConnection connection,
+                               HandlerTypeRegistry registry,
+                               IMessageSerializer serializer,
+                               IServiceScopeFactory scopeFactory,
+                               ILogger<NamedRabbitConsumer> logger,
+                               RabbitMqMetrics metrics,
+                               EventUpgraderRegistry? upgraderRegistry = null)
     {
         _consumerKey = consumerKey;
         _options = options;
         _connection = connection;
         _registry = registry;
+        _upgraderRegistry = upgraderRegistry;
         _serializer = serializer;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _metrics = metrics;
 
         if (options.MaxConcurrentHandlers > 0)
             _concurrencyLimiter = new SemaphoreSlim(options.MaxConcurrentHandlers);
@@ -186,9 +176,47 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             return;
         }
 
-        var (handlerType, eventType) = resolved.Value;
+        var (handlerType, eventType, isBatch) = resolved.Value;
 
-        var @event = _serializer.Deserialize(body, eventType);
+        if (isBatch)
+        {
+            _logger.LogWarning("[Consumer:{Key}] Handler for '{EventType}' is IBatchRabbitHandler<>, use batch consumer mode — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false);
+            return;
+        }
+
+        var eventVersion = GetEventVersion(properties);
+        object? @event;
+
+        if (_upgraderRegistry is not null)
+        {
+            var highestVersion = _upgraderRegistry.GetHighestVersion(eventTypeName);
+            var deserializationType = _upgraderRegistry.GetTypeForVersion(eventTypeName, eventVersion);
+
+            if (deserializationType is not null && eventVersion < highestVersion)
+            {
+                var oldEvent = _serializer.Deserialize(body, deserializationType);
+                if (oldEvent is null)
+                {
+                    _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' v{Version} (deliveryTag={Tag})", _consumerKey, eventTypeName, eventVersion, deliveryTag);
+                    await NackAsync(deliveryTag, requeue: false);
+                    return;
+                }
+
+                using var upgradeScope = _scopeFactory.CreateScope();
+                @event = _upgraderRegistry.Upgrade(eventTypeName, oldEvent, eventVersion, upgradeScope.ServiceProvider);
+
+                _logger.LogDebug("[Consumer:{Key}] Upgraded '{EventType}' v{Version} → v{HighestVersion}", _consumerKey, eventTypeName, eventVersion, highestVersion);
+            }
+            else
+                @event = _serializer.Deserialize(body, eventType);
+
+        }
+        else
+        {
+            @event = _serializer.Deserialize(body, eventType);
+        }
+
         if (@event is null)
         {
             _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
@@ -200,7 +228,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var deliveryCount = retryCount + 1;
         var context = BuildMessageContext(ea, retryCount);
 
-        // ── Tracing: receive + process ──────────────────────────
         var parentContext = ExtractParentContext(properties);
 
         using var receiveActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationReceive);
@@ -223,7 +250,16 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private async Task InvokeHandlerWithRetryAsync(Type handlerType, object @event, MessageContext context, ulong deliveryTag, int deliveryCount, BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, string eventTypeName, ActivityContext parentContext)
+    private async Task InvokeHandlerWithRetryAsync(Type handlerType,
+                                                   object @event,
+                                                   MessageContext context,
+                                                   ulong deliveryTag,
+                                                   int deliveryCount,
+                                                   BasicDeliverEventArgs ea,
+                                                   ReadOnlyMemory<byte> body,
+                                                   IReadOnlyBasicProperties properties,
+                                                   string eventTypeName,
+                                                   ActivityContext parentContext)
     {
         using var scope = _scopeFactory.CreateScope();
         var handler = scope.ServiceProvider.GetService(handlerType);
@@ -235,33 +271,58 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             return;
         }
 
-        // ── Tracing: process ──────────────────────────────────
         using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
 
-        if (processActivity is not null)
-        {
-            processActivity.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
-        }
+        processActivity?.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
 
+        var handlerSw = ValueStopwatch.StartNew();
         try
         {
             var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
             await invoker(handler, @event, context);
             await AckAsync(deliveryTag);
+
+            _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            _metrics.Consumed.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
         }
         catch (Exception ex)
         {
+            _metrics.ConsumeErrors.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
             processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
 
             _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
 
             if (ShouldRetry(deliveryCount))
             {
+                _metrics.Retried.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagAttempt, deliveryCount));
+
                 _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
             }
             else
             {
+                _metrics.DeadLettered.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
+
                 _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
                 await NackAsync(deliveryTag, requeue: false);
                 await DeadLetterMessageAsync(ea, body, properties, ex, deliveryCount);
@@ -377,15 +438,17 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             .First(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRabbitHandler<>));
 
         var eventType = handlerInterface.GetGenericArguments()[0];
-        var handleMethod = typeof(IRabbitHandler<>)
-            .MakeGenericType(eventType)
+        var handleMethod = typeof(IRabbitHandler<>).MakeGenericType(eventType)
             .GetMethod(nameof(IRabbitHandler<IIntegrationEvent>.HandleAsync))!;
 
         var hParam = Expression.Parameter(typeof(object), "h");
         var eParam = Expression.Parameter(typeof(object), "e");
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
 
-        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface),
+            handleMethod,
+            Expression.Convert(eParam, eventType),
+            cParam);
 
         return Expression.Lambda<Func<object, object, MessageContext, Task>>(call, hParam, eParam, cParam).Compile();
     }
@@ -481,8 +544,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             var strValue = value switch
             {
                 string s => s,
-                byte[] bytes => System.Text.Encoding.UTF8.GetString(bytes),
-                ReadOnlyMemory<byte> rom => System.Text.Encoding.UTF8.GetString(rom.Span),
+                byte[] bytes => Encoding.UTF8.GetString(bytes),
+                ReadOnlyMemory<byte> rom => Encoding.UTF8.GetString(rom.Span),
                 _ => value?.ToString(),
             };
 
@@ -493,9 +556,33 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         return result;
     }
 
-    // ────────────────────────────────────────────────────
-    // Tracing helpers
-    // ────────────────────────────────────────────────────
+    /// <summary>
+    /// High-performance stopwatch that avoids <see cref="System.Diagnostics.Stopwatch"/>
+    /// allocation. Returns elapsed milliseconds as double.
+    /// </summary>
+    private readonly struct ValueStopwatch
+    {
+        private readonly long _startTimestamp;
+
+        private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
+
+        public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+
+        public double GetElapsedMilliseconds() =>
+            Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+    }
+
+    /// <summary>
+    /// Extracts the event version from the x-event-version header.
+    /// Returns 1 if the header is missing or unparseable.
+    /// </summary>
+    private static int GetEventVersion(IReadOnlyBasicProperties properties)
+    {
+        var str = GetHeaderString(properties, MessageHeaders.EventVersion);
+        if (str is null || !int.TryParse(str, out var version))
+            return 1;
+        return version;
+    }
 
     /// <summary>
     /// Extracts the W3C traceparent from AMQP headers and returns
@@ -506,11 +593,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     {
         var traceParent = GetHeaderString(properties, RabbitMqActivitySource.TraceParentHeader);
 
-        if (traceParent is not null &&
-            ActivityContext.TryParse(traceParent, null, out var context))
-        {
+        if (traceParent is not null && ActivityContext.TryParse(traceParent, null, out var context))
             return context;
-        }
 
         return Activity.Current?.Context ?? default;
     }

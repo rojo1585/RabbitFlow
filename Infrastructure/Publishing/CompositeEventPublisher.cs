@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
+using RabbitFlow.Diagnostics;
 using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
 using System;
@@ -8,7 +9,6 @@ using System.Collections.Generic;
 using System.Text;
 
 namespace RabbitFlow.Infrastructure.Publishing;
-
 
 /// <summary>
 /// Facade that implements <see cref="IEventPublisher"/> and <see cref="IBatchEventPublisher"/>.
@@ -32,34 +32,37 @@ namespace RabbitFlow.Infrastructure.Publishing;
 /// </summary>
 internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPublisher
 {
-    private readonly IReadOnlyDictionary<string, NamedRabbitPublisher> _producers;
+    private readonly Dictionary<string, NamedRabbitPublisher> _producers;
     private readonly ILogger<CompositeEventPublisher> _logger;
     private readonly NamedRabbitPublisher? _defaultProducer;
 
-    public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, IEnumerable<RabbitProducerOptions> producerConfigs, ILoggerFactory loggerFactory)
+    public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry,
+                                   IMessageSerializer serializer,
+                                   IEnumerable<RabbitProducerOptions> producerConfigs,
+                                   ILoggerFactory loggerFactory,
+                                   RabbitMqMetrics metrics)
     {
         _logger = loggerFactory.CreateLogger<CompositeEventPublisher>();
-        var producers = new Dictionary<string, NamedRabbitPublisher>();
+        _producers = [];
 
         foreach (var config in producerConfigs)
         {
             // Validate no duplicate ServiceKey — fail fast at startup, not at publish time
-            if (!producers.TryAdd(config.ServiceKey, CreatePublisher(config, connectionRegistry, serializer, loggerFactory)))
+            if (!_producers.TryAdd(config.ServiceKey, CreatePublisher(config, connectionRegistry, serializer, loggerFactory, metrics)))
+            {
                 throw Exceptions.RabbitMqConfigurationException.DuplicateProducerKey(config.ServiceKey);
-
+            }
 
             _logger.LogDebug("Registered producer '{Key}' → exchange '{Exchange}' on connection '{Connection}'", config.ServiceKey, config.ExchangeName, config.ConnectionName);
         }
 
-        // Cache the single producer for fast default resolution (no enumerator allocation)
-        if (producers.Count == 1)
-            _defaultProducer = producers.Values.First();
-
-        _producers = producers;
+        if (_producers.Count == 1)
+        {
+            _defaultProducer = _producers.Values.First();
+        }
 
         _logger.LogInformation("Composite publisher initialized with {Count} producer(s)", _producers.Count);
     }
-
 
     /// <summary>
     /// Resolves the default producer (the only one registered).
@@ -78,10 +81,6 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
 
         throw new AmbiguousProducerException(_producers.Count, [.. _producers.Keys]);
     }
-    /// <summary>
-    /// The count of registered producers. Useful for diagnostics.
-    /// </summary>
-    public int ProducerCount => _producers.Count;
 
     /// <summary>
     /// Resolves a producer by key.
@@ -101,10 +100,15 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// Factory method to create a <see cref="NamedRabbitPublisher"/> from config.
     /// Separated for readability in the constructor loop.
     /// </summary>
-    private static NamedRabbitPublisher CreatePublisher(RabbitProducerOptions config, RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, ILoggerFactory loggerFactory)
+    private static NamedRabbitPublisher CreatePublisher(RabbitProducerOptions config, RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, ILoggerFactory loggerFactory, RabbitMqMetrics metrics)
     {
         var connection = connectionRegistry.GetConnection(config.ConnectionName);
-        return new NamedRabbitPublisher(_producerKey: config.ServiceKey, _options: config, _connection: connection, _serializer: serializer, _logger: loggerFactory.CreateLogger<NamedRabbitPublisher>());
+        return new NamedRabbitPublisher(_producerKey: config.ServiceKey,
+            _options: config,
+            _connection: connection,
+            _serializer: serializer,
+            _logger: loggerFactory.CreateLogger<NamedRabbitPublisher>(),
+            _metrics: metrics);
     }
 
     // ─── IEventPublisher ──────────────────────────────────────────────
