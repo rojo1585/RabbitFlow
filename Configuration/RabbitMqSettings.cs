@@ -18,10 +18,10 @@ namespace RabbitFlow.Configuration;
 ///       "evidencias": { "HostName": "...", "UserName": "...", ... }
 ///     },
 ///     "Producers": [
-///       { "ServiceKey": "uber-delivered", "ConnectionName": "mercedes", ... }
+///       { "ServiceKey": "uber-delivered", "ConnectionName": "Some", ... }
 ///     ],
 ///     "Consumers": [
-///       { "ServiceKey": "uber-consumer", "ConnectionName": "mercedes", ... }
+///       { "ServiceKey": "uber-consumer", "ConnectionName": "SomeTwo", ... }
 ///     ]
 ///   }
 /// }
@@ -71,11 +71,11 @@ public sealed class RabbitMqSettings
     /// Producer definitions. Each producer publishes to a specific exchange
     /// on a specific connection.
     /// </summary>
-    public List<RabbitProducerOptions> Producers { get; set; } = new();
+    public List<RabbitProducerOptions> Producers { get; set; } = [];
 
     /// <summary>
     /// Consumer definitions. Each consumer listens on a specific queue
     /// on a specific connection.
     /// </summary>
-    public List<RabbitConsumerOptions> Consumers { get; set; } = new();
+    public List<RabbitConsumerOptions> Consumers { get; set; } = [];
 }

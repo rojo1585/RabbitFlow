@@ -35,7 +35,7 @@ namespace RabbitFlow.Diagnostics;
 /// </summary>
 public static class RabbitMqActivitySource
 {
-    private static readonly object Lock = new();
+    private static readonly Lock Lock = new();
 
     /// <summary>
     /// The name used to register the <see cref="ActivitySource"/>.
@@ -79,10 +79,6 @@ public static class RabbitMqActivitySource
         }
     }
 
-    // ────────────────────────────────────────────────
-    // Activity names
-    // ────────────────────────────────────────────────
-
     /// <summary>
     /// Activity name for publish operations.
     /// Format: <c>{event-type} publish</c>
@@ -100,10 +96,6 @@ public static class RabbitMqActivitySource
     /// Format: <c>{event-type} process</c>
     /// </summary>
     public const string ProcessActivityName = "{event-type} process";
-
-    // ────────────────────────────────────────────────
-    // OTel semantic convention tag names
-    // ────────────────────────────────────────────────
 
     /// <summary>Always <c>"rabbitmq"</c>.</summary>
     public const string TagMessagingSystem = "messaging.system";
@@ -141,10 +133,6 @@ public static class RabbitMqActivitySource
     /// <summary>Error type when the operation fails.</summary>
     public const string TagErrorType = "error.type";
 
-    // ────────────────────────────────────────────────
-    // Tag values
-    // ────────────────────────────────────────────────
-
     /// <summary>Tag value for RabbitMQ.</summary>
     public const string SystemRabbitMq = "rabbitmq";
 
@@ -162,10 +150,6 @@ public static class RabbitMqActivitySource
 
     /// <summary>Tag value for process operation.</summary>
     public const string OperationProcess = "process";
-
-    // ────────────────────────────────────────────────
-    // AMQP trace propagation headers
-    // ────────────────────────────────────────────────
 
     /// <summary>
     /// W3C traceparent header injected into AMQP headers for distributed trace propagation.

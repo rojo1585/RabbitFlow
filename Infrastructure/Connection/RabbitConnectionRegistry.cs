@@ -28,9 +28,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     /// Creates a new registry. The connections are NOT started yet —
     /// call <see cref="StartAll"/> to begin connecting.
     /// </summary>
-    public RabbitConnectionRegistry(
-        IOptions<RabbitMqSettings> settings,
-        ILoggerFactory loggerFactory)
+    public RabbitConnectionRegistry(IOptions<RabbitMqSettings> settings, ILoggerFactory loggerFactory)
     {
         _settings = settings.Value;
         _loggerFactory = loggerFactory;
@@ -69,9 +67,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     /// <inheritdoc/>
     public IReadOnlyDictionary<string, bool> GetAllConnectionStates()
     {
-        return _connections.ToDictionary(
-            kvp => kvp.Key,
-            kvp => kvp.Value.IsConnected);
+        return _connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.IsConnected);
     }
 
     /// <summary>
@@ -91,7 +87,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
             conn.Start();
         }
 
-        _logger.LogInformation("{Count} connection(s) starting in background",_connections.Count);
+        _logger.LogInformation("{Count} connection(s) starting in background", _connections.Count);
     }
 
     /// <summary>
@@ -104,22 +100,14 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     internal void ValidateReferences()
     {
         foreach (var producer in _settings.Producers)
-        {
-            if (!_connections.ContainsKey(producer.ConnectionName))
-            {
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection(
-                    $"Producer '{producer.ServiceKey}'", producer.ConnectionName);
-            }
-        }
+            if (!_connections.ContainsKey(producer.ConnectionName))  
+                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Producer '{producer.ServiceKey}'", producer.ConnectionName);
+            
+        
 
         foreach (var consumer in _settings.Consumers)
-        {
             if (!_connections.ContainsKey(consumer.ConnectionName))
-            {
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection(
-                    $"Consumer '{consumer.ServiceKey}'", consumer.ConnectionName);
-            }
-        }
+                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Consumer '{consumer.ServiceKey}'", consumer.ConnectionName);
     }
 
     /// <summary>
@@ -141,16 +129,13 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
             .ToList();
 
         if (duplicates.Count > 0)
-        {
             throw Exceptions.RabbitMqConfigurationException.DuplicateConnectionName(string.Join(", ", duplicates));
-        }
+
 
         foreach (var (name, options) in _settings.Connections)
         {
-            // The dictionary key is the source of truth for the connection name.
-            // It's passed explicitly since RabbitConnectionOptions.Name uses init-only
-            // properties on a class (not a record), so it can't be mutated.
-            var managed = new ManagedConnection(name, options,_loggerFactory.CreateLogger<ManagedConnection>());
+            var managed = new ManagedConnection(name, options,
+                _loggerFactory.CreateLogger<ManagedConnection>());
 
             _connections[name] = managed;
 

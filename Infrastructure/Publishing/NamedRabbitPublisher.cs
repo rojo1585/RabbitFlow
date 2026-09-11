@@ -67,9 +67,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// Publisher confirmation tracking is enabled so that <c>BasicPublishAsync</c> throws
     /// <c>PublishException</c> on nack or basic.return, eliminating manual event handling.
     /// </summary>
-    private static readonly CreateChannelOptions ConfirmChannelOptions = new(
-        publisherConfirmationsEnabled: true,
-        publisherConfirmationTrackingEnabled: true);
+    private static readonly CreateChannelOptions ConfirmChannelOptions = new(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
     private readonly TimeProvider _timeProvider = _timeProvider ?? TimeProvider.System;
     private volatile bool _topologyDeclared;
 
@@ -121,8 +119,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 throw;
             }
 
-            _metrics.PublishDurationMs.Record(
-                sw.GetElapsedMilliseconds(),
+            _metrics.PublishDurationMs.Record(sw.GetElapsedMilliseconds(),
                 new(RabbitMqMetrics.TagProducerKey, _producerKey),
                 new(RabbitMqMetrics.TagEventType, eventTypeName),
                 new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
@@ -132,9 +129,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 new(RabbitMqMetrics.TagEventType, eventTypeName),
                 new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
 
-            _logger.LogDebug(
-                "[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]",
-                _producerKey, eventTypeName, _options.ExchangeName, routingKey);
+            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", _producerKey, eventTypeName, _options.ExchangeName, routingKey);
         }
         finally
         {
@@ -246,7 +241,6 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     {
         if (!_options.EnablePublisherConfirms)
         {
-            // Fire-and-forget — no confirmation, no timeout
             await channel.BasicPublishAsync(
                 exchange: _options.ExchangeName,
                 routingKey: routingKey,
@@ -257,9 +251,6 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
             return;
         }
 
-        // With publisher confirmation tracking enabled, BasicPublishAsync internally
-        // waits for the broker's ack before returning. We apply a timeout via
-        // CancellationToken so the caller doesn't block indefinitely.
         var confirmTimeout = TimeSpan.FromMilliseconds(_options.PublishConfirmTimeoutMs);
 
         using var timeoutCts = new CancellationTokenSource(confirmTimeout);
@@ -278,15 +269,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            // Our timeout fired — the broker didn't confirm within the window.
-            // The channel is left in a dirty state, but since we create a new channel
-            // per publish, it will be closed in the finally block.
             throw new PublisherConfirmTimeoutException(_producerKey, confirmTimeout);
         }
-        // NOTE: When publisherConfirmationTrackingEnabled is true, BasicPublishAsync
-        // may throw PublishException on nack or unroutable return. This exception
-        // propagates to the caller as-is. Once the exact namespace is confirmed for
-        // RabbitMQ.Client v7, it can be caught here and wrapped in PublisherNackException.
     }
 
     /// <summary>
@@ -311,7 +295,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     {
         if (!_topologyDeclared && _options.AutoDeclareTopology)
         {
-            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken);
+            await TopologyDeclarator.DeclareProducerTopologyAsync(
+                channel, _options, _logger, cancellationToken);
 
             _topologyDeclared = true;
         }
@@ -329,6 +314,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         var correlationId = Guid.NewGuid().ToString();
         var messageId = Guid.NewGuid().ToString();
 
+        // Resolve event type info (cached — no reflection after first call per type)
         var (eventTypeName, eventVersion) = ResolveEventTypeInfo<TEvent>();
 
         var properties = new BasicProperties
@@ -358,8 +344,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// Results are cached per <see cref="Type"/> — reflection runs only once.
     /// Falls back to <c>Type.FullName</c> and version 1 if no attribute is present.
     /// </summary>
-    private static (string EventTypeName, int EventVersion) ResolveEventTypeInfo<TEvent>()
-        where TEvent : class
+    private static (string EventTypeName, int EventVersion) ResolveEventTypeInfo<TEvent>() where TEvent : class
     {
         return EventTypeCache.GetOrAdd(typeof(TEvent), static type =>
         {
@@ -389,7 +374,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     }
 
     /// <summary>
-    /// High-performance stopwatch that avoids <see cref="System.Diagnostics.Stopwatch"/>
+    /// High-performance stopwatch that avoids <see cref="Stopwatch"/>
     /// allocation. Returns elapsed milliseconds as double.
     /// </summary>
     private readonly struct ValueStopwatch
@@ -398,9 +383,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
         private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
 
-        public static ValueStopwatch StartNew() => new(System.Diagnostics.Stopwatch.GetTimestamp());
+        public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
 
-        public double GetElapsedMilliseconds() =>
-            System.Diagnostics.Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+        public double GetElapsedMilliseconds() => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
     }
 }

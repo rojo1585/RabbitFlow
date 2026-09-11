@@ -18,15 +18,17 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// The event type name used for AMQP header matching. Matches the value written
 /// by <c>NamedRabbitPublisher</c> in the <c>x-event-type</c> header.
 /// </param>
-public sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName);
+/// <param name="IsBatch">Whether this is a batch handler (<c>IBatchRabbitHandler&lt;T&gt;</c>).</param>
+internal sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName, bool IsBatch = false);
 
 /// <summary>
-/// Maps (consumerKey, eventTypeName) to (handlerType, eventType) at runtime.
+/// Maps (consumerKey, eventTypeName) to (handlerType, eventType, isBatch) at runtime.
 /// Populated at startup from <see cref="HandlerRegistration"/> instances registered via DI.
 /// 
 /// <para>
 /// Registration pattern:
-/// <c>AddRabbitHandler&lt;THandler&gt;(consumerKey)</c> registers a <see cref="HandlerRegistration"/>
+/// <c>AddRabbitHandler&lt;THandler&gt;(consumerKey)</c> or
+/// <c>AddBatchRabbitHandler&lt;THandler&gt;(consumerKey)</c> registers a <see cref="HandlerRegistration"/>
 /// singleton in DI. When <see cref="HandlerTypeRegistry"/> is constructed, it collects all
 /// registrations and builds a lookup dictionary.
 /// </para>
@@ -37,7 +39,7 @@ public sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, T
 /// </summary>
 public sealed class HandlerTypeRegistry
 {
-    private readonly Dictionary<(string ConsumerKey, string EventTypeName), (Type HandlerType, Type EventType)> _lookup;
+    private readonly Dictionary<(string ConsumerKey, string EventTypeName), (Type HandlerType, Type EventType, bool IsBatch)> _lookup;
 
     /// <summary>
     /// Creates the registry and populates it from all <see cref="HandlerRegistration"/>
@@ -48,29 +50,29 @@ public sealed class HandlerTypeRegistry
     /// Using <see cref="IEnumerable{T}"/> instead of <see cref="IServiceProvider"/>
     /// follows the explicit dependencies principle (avoids service locator anti-pattern).
     /// </param>
-    public HandlerTypeRegistry(IEnumerable<HandlerRegistration> registrations)
+    internal HandlerTypeRegistry(IEnumerable<HandlerRegistration> registrations)
     {
-        var lookup = new Dictionary<(string, string), (Type, Type)>();
+        var lookup = new Dictionary<(string, string), (Type, Type, bool)>();
 
         foreach (var reg in registrations)
         {
             var key = (reg.ConsumerKey, reg.EventTypeName);
 
             if (lookup.ContainsKey(key))
-                throw new InvalidOperationException($"Duplicate handler registration for consumer '{reg.ConsumerKey}' " +$"and event type name '{reg.EventTypeName}'.");
+                throw new InvalidOperationException($"Duplicate handler registration for consumer '{reg.ConsumerKey}' and event type name '{reg.EventTypeName}'.");
 
-
-            lookup[key] = (reg.HandlerType, reg.EventType);
+            lookup[key] = (reg.HandlerType, reg.EventType, reg.IsBatch);
         }
 
         _lookup = lookup;
     }
 
     /// <summary>
-    /// Resolves the handler type and event type for a given consumer key and event type name.
+    /// Resolves the handler type, event type, and whether it's a batch handler
+    /// for a given consumer key and event type name.
     /// Returns <c>null</c> if no handler is registered for this combination.
     /// </summary>
-    public (Type HandlerType, Type EventType)? Resolve(string consumerKey, string eventTypeName)
+    public (Type HandlerType, Type EventType, bool IsBatch)? Resolve(string consumerKey, string eventTypeName)
     {
         return _lookup.GetValueOrDefault((consumerKey, eventTypeName));
     }

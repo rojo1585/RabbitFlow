@@ -8,6 +8,7 @@ using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Consuming;
 using RabbitFlow.Infrastructure.Publishing;
 using RabbitFlow.Infrastructure.Serializartion;
+using RabbitFlow.Infrastructure.Versioning;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -18,28 +19,8 @@ namespace RabbitFlow.Extensions;
 
 /// <summary>
 /// Fluent builder for configuring RabbitMQ services.
-/// 
-/// <para>
-/// Obtained via <c>services.AddRabbitMQ(...)</c>. All configuration
-/// methods return <c>this</c> for chaining.
-/// </para>
-/// 
-/// <para>
-/// The builder does NOT register services immediately. Registration happens
-/// when the owning <c>AddRabbitMQ</c> extension method calls
-/// <see cref="Build"/> internally.
-/// </para>
+/// Obtained via <c>services.AddRabbitMQ(...)</c>.
 /// </summary>
-/// <example>
-/// <code>
-/// services.AddRabbitMQ(configuration, builder => builder
-///     .WithJsonSerializer(options =>
-///     {
-///         options.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-///     })
-///     .WithSerializer&lt;MyProtobufSerializer&gt;());
-/// </code>
-/// </example>
 public sealed class RabbitMqBuilder
 {
     private readonly IServiceCollection _services;
@@ -47,11 +28,43 @@ public sealed class RabbitMqBuilder
     private Type? _customSerializerType;
     private IMessageSerializer? _customSerializerInstance;
     private Action<JsonSerializerOptions>? _jsonOptionsConfigure;
+    private string? _instrumentationName;
 
     internal RabbitMqBuilder(IServiceCollection services, RabbitMqSettings settings)
     {
         _services = services;
         _settings = settings;
+    }
+
+    /// <summary>
+    /// Overrides the OpenTelemetry instrumentation name.
+    /// This name is used for both the <see cref="System.Diagnostics.ActivitySource"/> (tracing)
+    /// and the <see cref="System.Diagnostics.Metrics.Meter"/> (metrics).
+    /// </summary>
+    /// <param name="name">
+    /// A unique name like <c>"Some.RabbitMQ"</c>.
+    /// Must match what is passed to <c>AddSource()</c> and <c>AddMeter()</c>
+    /// in the OpenTelemetry configuration.
+    /// </param>
+    /// <returns>This builder for chaining.</returns>
+    /// <remarks>
+    /// If not called, the value from <see cref="RabbitMqSettings.InstrumentationName"/>
+    /// is used, falling back to <see cref="RabbitMqSettings.DefaultInstrumentationName"/>.
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// services.AddRabbitMQ(configuration)
+    ///     .WithInstrumentationName("Some.RabbitMQ");
+    /// 
+    /// services.AddOpenTelemetry()
+    ///     .WithTracing(t => t.AddSource("Some.RabbitMQ"))
+    ///     .WithMetrics(m => m.AddMeter("Some.RabbitMQ"));
+    /// </code>
+    /// </example>
+    public RabbitMqBuilder WithInstrumentationName(string name)
+    {
+        _instrumentationName = name ?? throw new ArgumentNullException(nameof(name));
+        return this;
     }
 
     /// <summary>
@@ -88,32 +101,40 @@ public sealed class RabbitMqBuilder
     }
 
     /// <summary>
-    /// Registers all Some.RabbitMQ services into DI.
+    /// Registers all RabbitMQ services into DI.
     /// Called internally by <c>AddRabbitMQ</c>.
     /// </summary>
     internal void Build()
     {
+        // Resolve the instrumentation name: builder override > settings > default
+        var instrName = _instrumentationName ?? _settings.InstrumentationName ?? RabbitMqSettings.DefaultInstrumentationName;
+
         // 1. Configuration
         _services.Configure<RabbitMqSettings>(settings =>
         {
             settings.Connections = _settings.Connections;
             settings.Producers = _settings.Producers;
             settings.Consumers = _settings.Consumers;
+            settings.InstrumentationName = instrName;
         });
 
-        // 2. Connection Registry
+        // 2. Diagnostics — initialize ActivitySource + register Metrics 
+        RabbitMqActivitySource.Initialize(instrName);
+        _services.AddSingleton(new RabbitMqMetrics(instrName));
+
+        // 3. Connection Registry
         _services.AddSingleton<RabbitConnectionRegistry>();
         _services.AddSingleton<IRabbitConnectionRegistry>(sp =>
             sp.GetRequiredService<RabbitConnectionRegistry>());
 
-        // 3. Handler Registry
+        // 4. Handler Registry
         _services.AddSingleton<HandlerTypeRegistry>();
 
-        // 4. Serializer
-        RegisterSerializer();
+        // 4b. Event Upgrader Registry
+        _services.AddSingleton<EventUpgraderRegistry>();
 
-        // 5. Diagnostics (Metrics + Tracing)
-        _services.AddSingleton<RabbitMqMetrics>();
+        // 5. Serializer
+        RegisterSerializer();
 
         // 6. Publishers
         _services.AddSingleton<CompositeEventPublisher>(sp =>
@@ -130,7 +151,7 @@ public sealed class RabbitMqBuilder
         _services.AddSingleton<IBatchEventPublisher>(sp =>
             sp.GetRequiredService<CompositeEventPublisher>());
 
-        // 7. Hosted Services (order matters)
+        // 7. Hosted Services
         _services.AddHostedService<ConnectionInitializerHostedService>();
         _services.AddHostedService<RabbitConsumerHostedService>();
 
@@ -184,7 +205,6 @@ public sealed class RabbitMqBuilder
     private void AssertSerializerNotConfigured()
     {
         if (_customSerializerType is not null || _customSerializerInstance is not null || _jsonOptionsConfigure is not null)
-            throw new InvalidOperationException(
-                "A serializer is already configured. Call WithSerializer only once.");
+            throw new InvalidOperationException("A serializer is already configured. Call WithSerializer only once.");
     }
 }

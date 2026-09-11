@@ -78,9 +78,7 @@ public static class HealthCheckExtensions
 
             return builder.Add(new HealthCheckRegistration(
                 name: checkName,
-                factory: sp => new RabbitMqHealthCheck(
-                    connectionName,
-                    sp.GetRequiredService<IRabbitConnectionRegistry>()),
+                factory: sp => new RabbitMqHealthCheck(connectionName, sp.GetRequiredService<IRabbitConnectionRegistry>()),
                 failureStatus: failureStatus,
                 tags: allTags));
         }
@@ -117,9 +115,7 @@ public static class HealthCheckExtensions
 
             return builder.Add(new HealthCheckRegistration(
                 name: name ?? "rabbitmq",
-                factory: sp => new RabbitMqAllHealthCheck(
-                    sp.GetRequiredService<IRabbitConnectionRegistry>(),
-                    sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
+                factory: sp => new RabbitMqAllHealthCheck(sp.GetRequiredService<IRabbitConnectionRegistry>(), sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
                 failureStatus: failureStatus,
                 tags: allTags));
         }

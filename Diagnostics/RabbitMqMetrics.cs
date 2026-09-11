@@ -41,10 +41,6 @@ public sealed class RabbitMqMetrics
 
     private readonly Meter _meter;
 
-    // ────────────────────────────────────────────────
-    // Counters
-    // ────────────────────────────────────────────────
-
     /// <summary>
     /// Number of messages published. Incremented on successful publish.
     /// <para>Tags: <c>producer_key</c>, <c>event_type</c>, <c>exchange</c></para>
@@ -81,10 +77,6 @@ public sealed class RabbitMqMetrics
     /// </summary>
     public Counter<long> DeadLettered { get; }
 
-    // ────────────────────────────────────────────────
-    // Histograms
-    // ────────────────────────────────────────────────
-
     /// <summary>
     /// Duration of handler execution in milliseconds.
     /// Measured from handler invocation to ack (or error).
@@ -97,10 +89,6 @@ public sealed class RabbitMqMetrics
     /// <para>Tags: <c>producer_key</c>, <c>event_type</c>, <c>exchange</c></para>
     /// </summary>
     public Histogram<double> PublishDurationMs { get; }
-
-    // ────────────────────────────────────────────────
-    // Batch Consumer Metrics
-    // ────────────────────────────────────────────────
 
     /// <summary>
     /// Number of batches dispatched by batch consumers.
@@ -181,10 +169,6 @@ public sealed class RabbitMqMetrics
     /// Disposes the underlying <see cref="Meter"/>.
     /// </summary>
     public void Dispose() => _meter.Dispose();
-
-    // ────────────────────────────────────────────────
-    // Tag names (public constants for documentation)
-    // ────────────────────────────────────────────────
 
     /// <summary>Tag: the producer service key.</summary>
     public const string TagProducerKey = "producer_key";

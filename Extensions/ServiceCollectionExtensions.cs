@@ -33,7 +33,7 @@ public static class ServiceCollectionExtensions
         /// 
         /// // With OTel instrumentation name override
         /// services.AddRabbitMQ(builder.Configuration)
-        ///     .WithInstrumentationName("MiEmpresa.RabbitMQ");
+        ///     .WithInstrumentationName("Some.RabbitMQ");
         /// 
         /// // With OTel configuration
         /// services.AddOpenTelemetry()
@@ -83,7 +83,7 @@ public static class ServiceCollectionExtensions
         ///         ExchangeName = "orders"
         ///     });
         /// }, builder => builder
-        ///     .WithInstrumentationName("Some.RabbitMQ"));
+        ///     .WithInstrumentationName("MiEmpresa.RabbitMQ"));
         /// </code>
         /// </example>
         public IServiceCollection AddRabbitMQ(Action<RabbitMqSettings> configureSettings, Action<RabbitMqBuilder>? configureBuilder = null)

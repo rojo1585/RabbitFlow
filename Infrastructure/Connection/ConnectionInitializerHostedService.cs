@@ -26,7 +26,7 @@ namespace RabbitFlow.Infrastructure.Connection
     /// <c>StartAsync</c> dependencies.
     /// </para>
     /// </summary>
-    internal sealed class ConnectionInitializerHostedService(RabbitConnectionRegistry _registry, ILogger<ConnectionInitializerHostedService> logger) : IHostedService
+    internal sealed class ConnectionInitializerHostedService(RabbitConnectionRegistry registry, ILogger<ConnectionInitializerHostedService> logger) : IHostedService
     {
         public Task StartAsync(CancellationToken cancellationToken)
         {
@@ -34,18 +34,20 @@ namespace RabbitFlow.Infrastructure.Connection
 
             try
             {
-                _registry.StartAll();
+                registry.StartAll();
             }
             catch (Exception ex)
             {
                 logger.LogCritical(ex, "Fatal error starting RabbitMQ connections");
             }
+
             return Task.CompletedTask;
         }
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
             logger.LogInformation("RabbitMQ connection initializer stopping");
+
             return Task.CompletedTask;
         }
     }
