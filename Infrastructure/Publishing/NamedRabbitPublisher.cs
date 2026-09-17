@@ -21,17 +21,30 @@ namespace RabbitFlow.Infrastructure.Publishing;
 /// <summary>
 /// Publishes events to a single RabbitMQ exchange using a named connection.
 /// Each instance corresponds to one <see cref="RabbitProducerOptions"/> entry.
-/// 
+///
 /// <para>
-/// Channel strategy: A new channel is created per publish call. This is the
-/// safest approach because:
+/// Channel strategy (configurable via <see cref="RabbitProducerOptions.ChannelPoolSize"/>):
 /// <list type="bullet">
-///   <item>If the channel faults (e.g. broker restart), only the current publish fails.</item>
-///   <item>Publisher confirms are scoped to the channel — no cross-message interference.</item>
-///   <item>No shared state that could be corrupted by concurrent publishes.</item>
+///   <item>
+///     <b>Channel pool</b> (default, <see cref="RabbitProducerOptions.ChannelPoolSize"/> &gt; 0):
+///     Channels are rented from a pool and returned after use. This eliminates
+///     the AMQP round-trip overhead of channel creation per publish — the #1
+///     throughput bottleneck in channel-per-publish strategies.
+///   </item>
+///   <item>
+///     <b>Channel-per-publish</b> (<see cref="RabbitProducerOptions.ChannelPoolSize"/> = 0):
+///     A new channel is created per publish call and closed immediately.
+///     This is the safest approach because:
+///     <list type="bullet">
+///       <item>If the channel faults (e.g. broker restart), only the current publish fails.</item>
+///       <item>Publisher confirms are scoped to the channel — no cross-message interference.</item>
+///       <item>No shared state that could be corrupted by concurrent publishes.</item>
+///     </list>
+///     Use this mode for backward compatibility or when throughput is not critical.
+///   </item>
 /// </list>
 /// </para>
-/// 
+///
 /// <para>
 /// Publisher confirms (v7): When <see cref="RabbitProducerOptions.EnablePublisherConfirms"/>
 /// is true, channels are created with <c>CreateChannelOptions(publisherConfirmationsEnabled: true,
@@ -41,20 +54,21 @@ namespace RabbitFlow.Infrastructure.Publishing;
 /// If no confirmation arrives within <see cref="RabbitProducerOptions.PublishConfirmTimeoutMs"/>,
 /// a <see cref="PublisherConfirmTimeoutException"/> is thrown via a CancellationToken timeout.
 /// </para>
-/// 
+///
+/// <para>
+/// Channel pool + publisher confirms: When both are enabled, faulted channels (e.g. after
+/// confirm timeout) are <b>discarded</b> from the pool — they're never reused because
+/// unconfirmed messages leave the channel's confirm sequence in an inconsistent state.
+/// A fresh channel is created on the next rental.
+/// </para>
+///
 /// <para>
 /// Dual metadata: Tracing headers are written to AMQP message headers (primary source of truth).
 /// The <see cref="MessageEnvelope"/> inside the body stores <c>EventType</c> and <c>EventVersion</c>
 /// for type resolution. AMQP headers survive DLX/retry re-queuing.
 /// </para>
 /// </summary>
-internal sealed class NamedRabbitPublisher(string _producerKey,
-                                           RabbitProducerOptions _options,
-                                           ManagedConnection _connection,
-                                           IMessageSerializer _serializer,
-                                           ILogger<NamedRabbitPublisher> _logger,
-                                           RabbitMqMetrics _metrics,
-                                           TimeProvider? _timeProvider = null)
+internal sealed class NamedRabbitPublisher : IAsyncDisposable
 {
     /// <summary>
     /// Caches <see cref="EventVersionAttribute"/> lookups per event type.
@@ -68,16 +82,111 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// <c>PublishException</c> on nack or basic.return, eliminating manual event handling.
     /// </summary>
     private static readonly CreateChannelOptions ConfirmChannelOptions = new(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
-    private readonly TimeProvider _timeProvider = _timeProvider ?? TimeProvider.System;
+
+    private readonly string _producerKey;
+    private readonly RabbitProducerOptions _options;
+    private readonly ManagedConnection _connection;
+    private readonly IMessageSerializer _serializer;
+    private readonly ILogger<NamedRabbitPublisher> _logger;
+    private readonly TimeProvider _timeProvider;
+    private readonly RabbitMqMetrics _metrics;
     private volatile bool _topologyDeclared;
 
     /// <summary>
+    /// Channel pool — null when <see cref="RabbitProducerOptions.ChannelPoolSize"/> is 0
+    /// (channel-per-publish mode).
+    /// </summary>
+    private readonly ChannelPool? _channelPool;
+
+    /// <summary>
+    /// Whether channel pooling is enabled for this publisher.
+    /// </summary>
+    private readonly bool _poolingEnabled;
+
+    public NamedRabbitPublisher(string producerKey,
+                                RabbitProducerOptions options,
+                                ManagedConnection connection,
+                                IMessageSerializer serializer,
+                                ILogger<NamedRabbitPublisher> logger,
+                                RabbitMqMetrics metrics,
+                                TimeProvider? timeProvider = null)
+    {
+        _producerKey = producerKey;
+        _options = options;
+        _connection = connection;
+        _serializer = serializer;
+        _logger = logger;
+        _metrics = metrics;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+
+        _poolingEnabled = options.ChannelPoolSize > 0;
+
+        if (_poolingEnabled)
+        {
+            var channelOptions = options.EnablePublisherConfirms ? ConfirmChannelOptions : null;
+            _channelPool = new ChannelPool(
+                connection,
+                channelOptions,
+                options.ChannelPoolSize,
+                logger,
+                onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new(RabbitMqMetrics.TagProducerKey, producerKey)));
+
+            _logger.LogInformation("[Producer:{Key}] Channel pooling ENABLED (size={PoolSize}, confirms={Confirms})", producerKey, options.ChannelPoolSize, options.EnablePublisherConfirms);
+        }
+        else
+        {
+            _channelPool = null;
+
+            _logger.LogInformation("[Producer:{Key}] Channel pooling DISABLED (channel-per-publish, confirms={Confirms})", producerKey, options.EnablePublisherConfirms);
+        }
+    }
+
+    /// <summary>
     /// Publishes a single event to the configured exchange.
-    /// Creates a new channel per call, declares topology (once), publishes, disposes the channel.
+    ///
+    /// <para>
+    /// With pooling: Rents a channel from the pool, publishes, returns the channel.
+    /// Without pooling: Creates a new channel, publishes, closes the channel.
+    /// </para>
     /// </summary>
     public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
+        if (_poolingEnabled)
+            await PublishWithPoolAsync(@event, routingKeyOverride, cancellationToken);
+
+        else
+            await PublishWithoutPoolAsync(@event, routingKeyOverride, cancellationToken);
+
+    }
+
+    /// <summary>
+    /// Publishes a batch of events using the same channel.
+    /// More efficient than individual publishes because the channel and topology
+    /// are created/declared only once.
+    ///
+    /// <para>
+    /// With publisher confirms enabled, each <c>BasicPublishAsync</c> call blocks
+    /// until the broker confirms that individual message. This is slightly slower than
+    /// a single batch-level confirm but provides per-message error granularity.
+    /// </para>
+    /// </summary>
+    public async Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    {
+        if (_poolingEnabled)
+            await PublishBatchWithPoolAsync(events, routingKeyOverride, cancellationToken);
+        else
+            await PublishBatchWithoutPoolAsync(events, routingKeyOverride, cancellationToken);
+    }
+
+    /// <summary>
+    /// Publishes using a channel from the pool.
+    /// Faulted channels (after confirm timeout) are discarded.
+    /// </summary>
+    private async Task PublishWithPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    {
+        RecordPoolRented();
+        var channel = await _channelPool!.RentAsync(cancellationToken);
+        bool channelFaulted = false;
 
         try
         {
@@ -88,19 +197,167 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
             using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
 
-            if (activity is not null)
-            {
-                activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindExchange);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.ExchangeName);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, RabbitMqActivitySource.OperationPublish);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, routingKey);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingServiceKey, _producerKey);
-            }
+            SetPublishActivityTags(activity, routingKey, eventTypeName);
 
             var (body, properties) = BuildMessage(@event, routingKey);
+            InjectTraceContext(activity, properties);
 
+            var sw = ValueStopwatch.StartNew();
+            try
+            {
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+            }
+            catch (PublisherConfirmTimeoutException)
+            {
+                channelFaulted = true;
+                _metrics.PublishErrors.Add(1,
+                    new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagErrorType, nameof(PublisherConfirmTimeoutException)));
+
+                activity?.SetTag(RabbitMqActivitySource.TagErrorType, nameof(PublisherConfirmTimeoutException));
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _metrics.PublishErrors.Add(1,
+                    new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName));
+
+                activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+                throw;
+            }
+
+            RecordPublishSuccess(sw, eventTypeName, routingKey);
+        }
+        finally
+        {
+            if (channelFaulted)
+            {
+                _channelPool.Discard(channel);
+                RecordPoolDiscarded();
+            }
+            else
+            {
+                _channelPool.Return(channel);
+                RecordPoolReturned();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Batch publishes using a channel from the pool.
+    /// </summary>
+    private async Task PublishBatchWithPoolAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    {
+        var eventList = events as IList<TEvent> ?? events.ToList();
+        if (eventList.Count == 0) return;
+
+        RecordPoolRented();
+        var channel = await _channelPool!.RentAsync(cancellationToken);
+        bool channelFaulted = false;
+
+        try
+        {
+            await InitializeChannelAsync(channel, cancellationToken);
+
+            var routingKey = routingKeyOverride ?? _options.RoutingKey;
+            var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
+            var publishedCount = 0;
+
+            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
+
+            SetPublishActivityTags(activity, routingKey, eventTypeName);
+
+            activity?.SetTag("messaging.batch.message_count", eventList.Count);
+
+            var batchSw = ValueStopwatch.StartNew();
+
+            for (var i = 0; i < eventList.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var (body, properties) = BuildMessage(eventList[i], routingKey);
+                InjectTraceContext(activity, properties);
+
+                try
+                {
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                    publishedCount++;
+                }
+                catch (PublisherConfirmTimeoutException)
+                {
+                    channelFaulted = true;
+                    _metrics.PublishErrors.Add(1,
+                        new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagErrorType, nameof(PublisherConfirmTimeoutException)));
+
+                    activity?.SetTag(RabbitMqActivitySource.TagErrorType, nameof(PublisherConfirmTimeoutException));
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _metrics.PublishErrors.Add(1,
+                        new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName));
+
+                    activity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+                    throw;
+                }
+            }
+
+            _metrics.Published.Add(publishedCount,
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+            _metrics.PublishDurationMs.Record(
+                batchSw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagProducerKey, _producerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+            _logger.LogInformation("[Producer:{Key}] Batch-published {Count} {EventType} events → '{Exchange}'", _producerKey, publishedCount, eventTypeName, _options.ExchangeName);
+        }
+        finally
+        {
+            if (channelFaulted)
+            {
+                _channelPool.Discard(channel);
+                RecordPoolDiscarded();
+            }
+            else
+            {
+                _channelPool.Return(channel);
+                RecordPoolReturned();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Publishes using a new channel per call (backward compatible).
+    /// </summary>
+    private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    {
+        var channel = await _connection.CreateChannelAsync(
+            _options.EnablePublisherConfirms ? ConfirmChannelOptions : null,
+            cancellationToken: cancellationToken);
+
+        try
+        {
+            await InitializeChannelAsync(channel, cancellationToken);
+
+            var routingKey = routingKeyOverride ?? _options.RoutingKey;
+            var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
+
+            using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
+
+            SetPublishActivityTags(activity, routingKey, eventTypeName);
+
+            var (body, properties) = BuildMessage(@event, routingKey);
             InjectTraceContext(activity, properties);
 
             var sw = ValueStopwatch.StartNew();
@@ -119,17 +376,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
                 throw;
             }
 
-            _metrics.PublishDurationMs.Record(sw.GetElapsedMilliseconds(),
-                new(RabbitMqMetrics.TagProducerKey, _producerKey),
-                new(RabbitMqMetrics.TagEventType, eventTypeName),
-                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
-
-            _metrics.Published.Add(1,
-                new(RabbitMqMetrics.TagProducerKey, _producerKey),
-                new(RabbitMqMetrics.TagEventType, eventTypeName),
-                new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
-
-            _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", _producerKey, eventTypeName, _options.ExchangeName, routingKey);
+            RecordPublishSuccess(sw, eventTypeName, routingKey);
         }
         finally
         {
@@ -138,20 +385,11 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     }
 
     /// <summary>
-    /// Publishes a batch of events using the same channel.
-    /// More efficient than individual publishes because the channel and topology
-    /// are created/declared only once.
-    /// 
-    /// <para>
-    /// With publisher confirms enabled, each <c>BasicPublishAsync</c> call blocks
-    /// until the broker confirms that individual message. This is slightly slower than
-    /// a single batch-level confirm but provides per-message error granularity.
-    /// </para>
+    /// Batch publishes using a new channel (backward compatible).
     /// </summary>
-    public async Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    private async Task PublishBatchWithoutPoolAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         var eventList = events as IList<TEvent> ?? events.ToList();
-
         if (eventList.Count == 0) return;
 
         var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
@@ -166,17 +404,9 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
             using var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} publish", ActivityKind.Producer);
 
-            if (activity is not null)
-            {
-                activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindExchange);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.ExchangeName);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, RabbitMqActivitySource.OperationPublish);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, routingKey);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
-                activity.SetTag(RabbitMqActivitySource.TagMessagingServiceKey, _producerKey);
-                activity.SetTag("messaging.batch.message_count", eventList.Count);
-            }
+            SetPublishActivityTags(activity, routingKey, eventTypeName);
+
+            activity?.SetTag("messaging.batch.message_count", eventList.Count);
 
             var batchSw = ValueStopwatch.StartNew();
 
@@ -225,7 +455,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
     /// <summary>
     /// Executes a single <c>BasicPublishAsync</c> call with proper error handling.
-    /// 
+    ///
     /// <para>
     /// When publisher confirms are enabled (via <see cref="ConfirmChannelOptions"/>),
     /// <c>BasicPublishAsync</c> blocks until the broker responds. On success it completes
@@ -237,7 +467,12 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// </list>
     /// </para>
     /// </summary>
-    private async Task ExecutePublishAsync(IChannel channel, string routingKey, BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
+    private async Task ExecutePublishAsync(
+        IChannel channel,
+        string routingKey,
+        BasicProperties properties,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
     {
         if (!_options.EnablePublisherConfirms)
         {
@@ -274,6 +509,66 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     }
 
     /// <summary>
+    /// Sets common activity tags for a publish operation.
+    /// </summary>
+    private void SetPublishActivityTags(Activity? activity, string routingKey, string eventTypeName)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindExchange);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.ExchangeName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, RabbitMqActivitySource.OperationPublish);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, routingKey);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingServiceKey, _producerKey);
+    }
+
+    /// <summary>
+    /// Records successful publish metrics and logs.
+    /// </summary>
+    private void RecordPublishSuccess(ValueStopwatch sw, string eventTypeName, string routingKey)
+    {
+        _metrics.PublishDurationMs.Record(
+            sw.GetElapsedMilliseconds(),
+            new(RabbitMqMetrics.TagProducerKey, _producerKey),
+            new(RabbitMqMetrics.TagEventType, eventTypeName),
+            new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+        _metrics.Published.Add(1,
+            new(RabbitMqMetrics.TagProducerKey, _producerKey),
+            new(RabbitMqMetrics.TagEventType, eventTypeName),
+            new(RabbitMqMetrics.TagExchange, _options.ExchangeName));
+
+        _logger.LogDebug("[Producer:{Key}] Published {EventType} → '{Exchange}' [{RoutingKey}]", _producerKey, eventTypeName, _options.ExchangeName, routingKey);
+    }
+
+
+    /// <summary>
+    /// Records a channel rental from the pool.
+    /// </summary>
+    private void RecordPoolRented()
+    {
+        _metrics.ChannelPoolRented.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+    }
+
+    /// <summary>
+    /// Records a channel return to the pool.
+    /// </summary>
+    private void RecordPoolReturned()
+    {
+        _metrics.ChannelPoolReturned.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+    }
+
+    /// <summary>
+    /// Records a channel discard from the pool (faulted/dirty channel).
+    /// </summary>
+    private void RecordPoolDiscarded()
+    {
+        _metrics.ChannelPoolDiscarded.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+    }
+
+    /// <summary>
     /// Closes the channel, ignoring errors if already closed or disposed.
     /// Prevents <see cref="AlreadyClosedException"/> from masking the real publish error.
     /// </summary>
@@ -283,8 +578,8 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
         {
             await channel.CloseAsync();
         }
-        catch (AlreadyClosedException) { /* connection dropped — expected */ }
-        catch (ObjectDisposedException) { /* channel already disposed */ }
+        catch (AlreadyClosedException) { }
+        catch (ObjectDisposedException) { }
         catch { }
     }
 
@@ -295,8 +590,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     {
         if (!_topologyDeclared && _options.AutoDeclareTopology)
         {
-            await TopologyDeclarator.DeclareProducerTopologyAsync(
-                channel, _options, _logger, cancellationToken);
+            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken);
 
             _topologyDeclared = true;
         }
@@ -309,12 +603,11 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
     /// </summary>
     private (ReadOnlyMemory<byte> Body, BasicProperties Properties) BuildMessage<TEvent>(TEvent @event, string routingKey) where TEvent : class
     {
-        // Single time read — avoids inconsistent timestamps with fake TimeProviders
+
         var now = _timeProvider.GetUtcNow();
         var correlationId = Guid.NewGuid().ToString();
         var messageId = Guid.NewGuid().ToString();
 
-        // Resolve event type info (cached — no reflection after first call per type)
         var (eventTypeName, eventVersion) = ResolveEventTypeInfo<TEvent>();
 
         var properties = new BasicProperties
@@ -323,7 +616,7 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
             ContentEncoding = "utf-8",
             DeliveryMode = DeliveryModes.Persistent,
             MessageId = messageId,
-            Timestamp = new AmqpTimestamp(now.ToUnixTimeSeconds()),
+            Timestamp = new AmqpTimestamp(now.ToUnixTimeMilliseconds()),
             Headers = new Dictionary<string, object?>
             {
                 [MessageHeaders.CorrelationId] = correlationId,
@@ -385,6 +678,17 @@ internal sealed class NamedRabbitPublisher(string _producerKey,
 
         public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
 
-        public double GetElapsedMilliseconds() => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+        public double GetElapsedMilliseconds() =>
+            Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+    }
+
+    /// <summary>
+    /// Disposes the channel pool (if pooling is enabled).
+    /// Rented channels are NOT closed — their callers must return or discard them.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_channelPool is not null)
+            await _channelPool.DisposeAsync();
     }
 }
