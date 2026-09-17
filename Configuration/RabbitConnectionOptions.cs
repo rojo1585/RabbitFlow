@@ -69,4 +69,48 @@ public sealed class RabbitConnectionOptions
     /// Defaults to 60 seconds.
     /// </summary>
     public int MaxBackoffSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// TLS/SSL configuration for this connection.
+    /// When null (default), the connection uses plaintext AMQP (port 5672).
+    /// When set with <see cref="TlsOptions.Enabled"/> = true, the connection
+    /// uses AMQPS (typically port 5671).
+    /// </summary>
+    /// <remarks>
+    /// Required for cloud brokers (AWS Amazon MQ, Azure, CloudAMQP) and
+    /// any environment that mandates encrypted connections.
+    /// Supports both server-authenticated TLS and mutual TLS (mTLS).
+    /// </remarks>
+    /// <example>
+    /// <code>
+    /// // Cloud broker with server TLS
+    /// new RabbitConnectionOptions
+    /// {
+    ///     Name = "cloud",
+    ///     HostName = "b-123.mq.amazonaws.com",
+    ///     Port = 5671,
+    ///     UserName = "user",
+    ///     Password = "pass",
+    ///     Tls = new TlsOptions { Enabled = true }
+    /// };
+    /// 
+    /// // mTLS with client certificate
+    /// new RabbitConnectionOptions
+    /// {
+    ///     Name = "onprem",
+    ///     HostName = "rabbit.internal",
+    ///     Port = 5671,
+    ///     UserName = "user",
+    ///     Password = "pass",
+    ///     Tls = new TlsOptions
+    ///     {
+    ///         Enabled = true,
+    ///         ServerName = "rabbit.internal",
+    ///         CertPath = "/certs/client.p12",
+    ///         CertPassphrase = "secret"
+    ///     }
+    /// };
+    /// </code>
+    /// </example>
+    public TlsOptions? Tls { get; init; }
 }
