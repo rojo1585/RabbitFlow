@@ -1,21 +1,22 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dotnet/brand/main/logo/dotnet-logo.svg" alt="Apymsa.RabbitMQ Logo" width="100" height="100" />
-  <h1 align="center">Apymsa.RabbitMQ</h1>
+  <img src="https://raw.githubusercontent.com/dotnet/brand/main/logo/dotnet-logo.svg" alt="RabbitFlow Logo" width="100" height="100" />
+  <h1 align="center">RabbitFlow</h1>
   <p align="center">
-    <b>Enterprise-grade, high-throughput RabbitMQ client framework for .NET</b>
+    <b>Enterprise-grade, high-throughput RabbitMQ client framework for .NET 8, 9, and 10</b>
   </p>
   <p align="center">
     <a href="#-features">Features</a> •
     <a href="#-architecture">Architecture</a> •
     <a href="#-quick-start">Quick Start</a> •
     <a href="#-channel-pooling">Channel Pooling</a> •
-    <a href="#-observability">Observability</a>
+    <a href="#-configuration-reference">Configuration</a> •
+    <a href="#-observability--metrics">Metrics</a>
   </p>
 </p>
 
 <p align="center">
-  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0%20%7C%20Standard%202.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET Support" /></a>
-  <a href="https://www.nuget.org/packages/Apymsa.RabbitMQ"><img src="https://img.shields.io/nuget/v/Apymsa.RabbitMQ?style=for-the-badge&logo=nuget&color=004880" alt="NuGet Version" /></a>
+  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET Support" /></a>
+  <a href="https://www.nuget.org/packages/RabbitFlow"><img src="https://img.shields.io/nuget/v/RabbitFlow?style=for-the-badge&logo=nuget&color=004880" alt="NuGet Version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
   <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Enabled-008080?style=for-the-badge&logo=opentelemetry&logoColor=white" alt="OpenTelemetry Ready" /></a>
 </p>
