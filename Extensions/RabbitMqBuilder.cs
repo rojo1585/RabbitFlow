@@ -7,7 +7,7 @@ using RabbitFlow.Diagnostics;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Consuming;
 using RabbitFlow.Infrastructure.Publishing;
-using RabbitFlow.Infrastructure.Serializartion;
+using RabbitFlow.Infrastructure.Serialization;
 using RabbitFlow.Infrastructure.Versioning;
 using System;
 using System.Collections.Generic;
