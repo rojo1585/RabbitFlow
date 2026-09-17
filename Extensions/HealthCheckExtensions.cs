@@ -76,11 +76,10 @@ public static class HealthCheckExtensions
             var checkName = name ?? $"rabbitmq-{connectionName}";
             var allTags = MergeTags(tags, "rabbitmq");
 
-            return builder.Add(new HealthCheckRegistration(
-                name: checkName,
-                factory: sp => new RabbitMqHealthCheck(connectionName, sp.GetRequiredService<IRabbitConnectionRegistry>()),
-                failureStatus: failureStatus,
-                tags: allTags));
+            return builder.Add(new HealthCheckRegistration(name: checkName,
+                                                           factory: sp => new RabbitMqHealthCheck(connectionName, sp.GetRequiredService<IRabbitConnectionRegistry>()),
+                                                           failureStatus: failureStatus,
+                                                           tags: allTags));
         }
 
         /// <summary>
@@ -105,6 +104,7 @@ public static class HealthCheckExtensions
         /// </param>
         /// <returns>The builder for chaining.</returns>
         /// <remarks>
+        /// Must be called AFTER <c>AddRabbitMQ()</c> so that
         /// <c>IRabbitConnectionRegistry</c> and <c>IOptions&lt;RabbitMqSettings&gt;</c> are registered.
         /// </remarks>
         public IHealthChecksBuilder AddRabbitMqAll(string? name = null, HealthStatus? failureStatus = null, string[]? tags = null)
@@ -115,7 +115,7 @@ public static class HealthCheckExtensions
 
             return builder.Add(new HealthCheckRegistration(
                 name: name ?? "rabbitmq",
-                factory: sp => new RabbitMqAllHealthCheck(sp.GetRequiredService<IRabbitConnectionRegistry>(), sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
+                factory: sp => new RabbitMqAllHealthCheck(sp.GetRequiredService<IRabbitConnectionRegistry>(),sp.GetRequiredService<IOptions<RabbitMqSettings>>()),
                 failureStatus: failureStatus,
                 tags: allTags));
         }

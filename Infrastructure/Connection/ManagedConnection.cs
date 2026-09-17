@@ -34,7 +34,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// </param>
 public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
-    private readonly Lock _lock = new();
+    private readonly object _lock = new();
     private IConnection? _connection;
     private TaskCompletionSource<bool>? _connectionClosedTcs;
     private CancellationTokenSource? _loopCts;
@@ -67,7 +67,8 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <exception cref="ObjectDisposedException">Thrown if this instance has been disposed.</exception>
     public void Start()
     {
-        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(ManagedConnection));
 
         _loopCts = new CancellationTokenSource();
         _loopTask = Task.Run(() => ConnectionLoopAsync(_loopCts.Token));
@@ -96,13 +97,20 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <exception cref="TimeoutException">
     /// Thrown if no connection is available within the timeout.
     /// </exception>
-    public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<IChannel> CreateChannelAsync(
+        CreateChannelOptions? channelOptions = null,
+        CancellationToken cancellationToken = default,
+        TimeSpan? timeout = null)
     {
-        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(ManagedConnection));
 
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
         using var timeoutCts = new CancellationTokenSource(effectiveTimeout);
-        using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _loopCts?.Token ?? CancellationToken.None, cancellationToken);
+        using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            timeoutCts.Token,
+            _loopCts?.Token ?? CancellationToken.None,
+            cancellationToken);
 
         try
         {
@@ -116,7 +124,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
                     try
                     {
                         var channel = await conn.CreateChannelAsync(channelOptions, combinedCts.Token);
-                        _logger.LogDebug("[{Name}] Channel #{ChannelNumber} created", _options.Name, channel.ChannelNumber);
+                        _logger.LogDebug("[{Name}] Channel #{ChannelNumber} created", Name, channel.ChannelNumber);
                         return channel;
                     }
                     catch (AlreadyClosedException)
@@ -140,7 +148,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// </summary>
     private async Task ConnectionLoopAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("[{Name}] Connection loop started → {Host}:{Port}/{VHost}", _options.Name, _options.HostName, _options.Port, _options.VirtualHost);
+        _logger.LogInformation("[{Name}] Connection loop started → {Host}:{Port}/{VHost}", Name, _options.HostName, _options.Port, _options.VirtualHost);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -161,18 +169,17 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[{Name}] Connection error", _options.Name);
+                _logger.LogError(ex, "[{Name}] Connection error", Name);
                 SafeCloseConnection();
             }
 
-            // Connection closed or errored — wait before reconnecting
             if (!cancellationToken.IsCancellationRequested)
             {
                 await BackoffDelayAsync(cancellationToken);
             }
         }
 
-        _logger.LogInformation("[{Name}] Connection loop stopped", _options.Name);
+        _logger.LogInformation("[{Name}] Connection loop stopped", Name);
     }
 
     /// <summary>
@@ -192,7 +199,13 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
         };
 
-        _logger.LogInformation("[{Name}] Connecting to {Host}:{Port}...", _options.Name, _options.HostName, _options.Port);
+        if (_options.Tls is { Enabled: true })
+        {
+            factory.Ssl = BuildSslOptions(_options.Tls);
+            _logger.LogInformation("[{Name}] TLS enabled → ServerName={ServerName}, mTLS={Mtls}, Protocol={Protocol}", Name, _options.Tls.ServerName ?? _options.HostName, _options.Tls.CertPath is not null, _options.Tls.Protocol);
+        }
+
+        _logger.LogInformation("[{Name}] Connecting to {Host}:{Port}{Tls}...", Name, _options.HostName, _options.Port, _options.Tls is { Enabled: true } ? " (TLS)" : "");
 
         var connection = await factory.CreateConnectionAsync(cancellationToken);
 
@@ -212,39 +225,36 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         if (wasDisposed)
         {
-            await connection.CloseAsync(cancellationToken);
+            await connection.CloseAsync();
             return;
         }
 
         connection.ConnectionShutdownAsync += OnConnectionShutdown;
 
-        _logger.LogInformation("[{Name}] Connected to {Host}:{Port}/{VHost} (local port {LocalPort})", _options.Name, _options.HostName, _options.Port, _options.VirtualHost, connection.LocalPort);
+        _logger.LogInformation("[{Name}] Connected to {Host}:{Port}/{VHost} (local port {LocalPort})", Name, _options.HostName, _options.Port, _options.VirtualHost, connection.LocalPort);
     }
 
     /// <summary>
     /// Handles connection shutdown events. Completes the TCS so that
     /// <see cref="ConnectionLoopAsync"/> wakes up and reconnects.
     /// </summary>
-    private Task OnConnectionShutdown(object sender,    ShutdownEventArgs args)
+    private Task OnConnectionShutdown(object sender, ShutdownEventArgs args)
     {
-        // Unsubscribe from this connection's events
         if (sender is IConnection conn)
             conn.ConnectionShutdownAsync -= OnConnectionShutdown;
 
         lock (_lock)
         {
-            // Only null out if it's the same connection
             if (ReferenceEquals(sender, _connection))
                 _connection = null;
-        }
 
-        // Signal the loop to wake up
+        }
         _connectionClosedTcs?.TrySetResult(true);
 
         if (args.Initiator == ShutdownInitiator.Application)
-            _logger.LogInformation($"[{Name}] Connection closed by application");
+            _logger.LogInformation("[{Name}] Connection closed by application", Name);
         else
-            _logger.LogWarning($"[{Name}] Connection lost: {args.ReplyText} (initiator: {args.Initiator}), will reconnect...");
+            _logger.LogWarning("[{Name}] Connection lost: {Reason} (initiator: {Initiator}), will reconnect...", Name, args.ReplyText, args.Initiator);
 
         return Task.CompletedTask;
     }
@@ -256,7 +266,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     {
         var delay = TimeSpan.FromSeconds(_backoffSeconds);
 
-        _logger.LogInformation($"[{Name}] Reconnecting in {delay.TotalSeconds}s...", delay.TotalSeconds);
+        _logger.LogInformation("[{Name}] Reconnecting in {Delay}s...", Name, delay.TotalSeconds);
 
         await Task.Delay(delay, cancellationToken);
 
@@ -286,13 +296,41 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         try
         {
-            // Fire-and-forget close
             _ = connToClose.CloseAsync();
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, $"[{Name}] Error closing connection (ignoring)");
+            _logger.LogDebug(ex, "[{Name}] Error closing connection (ignoring)", Name);
         }
+    }
+
+    /// <summary>
+    /// Builds <see cref="SslOption"/> from <see cref="TlsOptions"/>.
+    /// Called only when TLS is enabled.
+    /// </summary>
+    private static SslOption BuildSslOptions(TlsOptions tls)
+    {
+        var ssl = new SslOption
+        {
+            Enabled = true,
+            ServerName = tls.ServerName ?? string.Empty,
+            CertPath = tls.CertPath ?? string.Empty,
+            CertPassphrase = tls.CertPassphrase,
+            Version = tls.Protocol,
+        };
+
+        if (tls.AllowUnknownCAs || tls.DisableCertificateRevocationCheck)
+        {
+            ssl.CertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
+            {
+                if (tls.AllowUnknownCAs && sslPolicyErrors == System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors)
+                    return true;
+
+                return sslPolicyErrors == System.Net.Security.SslPolicyErrors.None;
+            };
+        }
+
+        return ssl;
     }
 
     /// <summary>
@@ -304,7 +342,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         if (_disposed) return;
         _disposed = true;
 
-        _logger.LogInformation($"[{Name}] Disposing...");
+        _logger.LogInformation("[{Name}] Disposing...", Name);
 
         if (_loopCts is not null)
         {
@@ -314,13 +352,12 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             {
                 try
                 {
-                    // Give the loop a moment to finish gracefully
                     await Task.WhenAny(_loopTask, Task.Delay(2000));
                 }
-                catch (OperationCanceledException) { /* expected */ }
+                catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, $"[{Name}] Error waiting for loop to stop");
+                    _logger.LogDebug(ex, "[{Name}] Error waiting for loop to stop", Name);
                 }
             }
 
@@ -349,11 +386,11 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             try
             {
                 await connToClose.CloseAsync();
-                _logger.LogInformation($"[{Name}] Connection closed (disposed)");
+                _logger.LogInformation("[{Name}] Connection closed (disposed)", Name);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, $"[{Name}] Error closing connection during dispose");
+                _logger.LogDebug(ex, "[{Name}] Error closing connection during dispose", Name);
             }
         }
     }
