@@ -95,7 +95,7 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connec
             }
         }
 
-        await Task.WhenAll(consumerTasks);
+        await Task.WhenAll(consumerTasks).ConfigureAwait(false);
 
         _logger.LogInformation("All consumers stopped.");
     }

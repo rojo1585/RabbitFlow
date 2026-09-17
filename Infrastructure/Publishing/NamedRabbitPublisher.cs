@@ -152,10 +152,10 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         if (_poolingEnabled)
-            await PublishWithPoolAsync(@event, routingKeyOverride, cancellationToken);
+            await PublishWithPoolAsync(@event, routingKeyOverride, cancellationToken).ConfigureAwait(false);
 
         else
-            await PublishWithoutPoolAsync(@event, routingKeyOverride, cancellationToken);
+            await PublishWithoutPoolAsync(@event, routingKeyOverride, cancellationToken).ConfigureAwait(false);
 
     }
 
@@ -173,9 +173,9 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     public async Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         if (_poolingEnabled)
-            await PublishBatchWithPoolAsync(events, routingKeyOverride, cancellationToken);
+            await PublishBatchWithPoolAsync(events, routingKeyOverride, cancellationToken).ConfigureAwait(false);
         else
-            await PublishBatchWithoutPoolAsync(events, routingKeyOverride, cancellationToken);
+            await PublishBatchWithoutPoolAsync(events, routingKeyOverride, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -185,12 +185,12 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     private async Task PublishWithPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         RecordPoolRented();
-        var channel = await _channelPool!.RentAsync(cancellationToken);
+        var channel = await _channelPool!.RentAsync(cancellationToken).ConfigureAwait(false);
         bool channelFaulted = false;
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken);
+            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -205,7 +205,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
             var sw = ValueStopwatch.StartNew();
             try
             {
-                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
             }
             catch (PublisherConfirmTimeoutException)
             {
@@ -251,16 +251,16 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private async Task PublishBatchWithPoolAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var eventList = events as IList<TEvent> ?? events.ToList();
+        var eventList = events as IList<TEvent> ?? [.. events];
         if (eventList.Count == 0) return;
 
         RecordPoolRented();
-        var channel = await _channelPool!.RentAsync(cancellationToken);
+        var channel = await _channelPool!.RentAsync(cancellationToken).ConfigureAwait(false);
         bool channelFaulted = false;
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken);
+            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -283,7 +283,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
                 try
                 {
-                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
                     publishedCount++;
                 }
                 catch (PublisherConfirmTimeoutException)
@@ -342,13 +342,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(
-            _options.EnablePublisherConfirms ? ConfirmChannelOptions : null,
-            cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null,cancellationToken: cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken);
+            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -363,7 +361,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
             var sw = ValueStopwatch.StartNew();
             try
             {
-                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -380,7 +378,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         }
         finally
         {
-            await SafeCloseChannelAsync(channel);
+            await SafeCloseChannelAsync(channel).ConfigureAwait(false);
         }
     }
 
@@ -392,11 +390,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         var eventList = events as IList<TEvent> ?? events.ToList();
         if (eventList.Count == 0) return;
 
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken);
+            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -419,7 +417,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
                 try
                 {
-                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken);
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
                     publishedCount++;
                 }
                 catch (Exception ex)
@@ -449,7 +447,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         }
         finally
         {
-            await SafeCloseChannelAsync(channel);
+            await SafeCloseChannelAsync(channel).ConfigureAwait(false);
         }
     }
 
@@ -482,7 +480,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 mandatory: _options.Mandatory,
                 basicProperties: properties,
                 body: body,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -500,7 +498,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 mandatory: _options.Mandatory,
                 basicProperties: properties,
                 body: body,
-                cancellationToken: linkedCts.Token);
+                cancellationToken: linkedCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -576,7 +574,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     {
         try
         {
-            await channel.CloseAsync();
+            await channel.CloseAsync().ConfigureAwait(false);
         }
         catch (AlreadyClosedException) { }
         catch (ObjectDisposedException) { }
@@ -590,7 +588,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     {
         if (!_topologyDeclared && _options.AutoDeclareTopology)
         {
-            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken);
+            await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken).ConfigureAwait(false);
 
             _topologyDeclared = true;
         }
@@ -689,6 +687,6 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_channelPool is not null)
-            await _channelPool.DisposeAsync();
+            await _channelPool.DisposeAsync().ConfigureAwait(false);
     }
 }
