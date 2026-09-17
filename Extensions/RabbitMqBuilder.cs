@@ -42,7 +42,7 @@ public sealed class RabbitMqBuilder
     /// and the <see cref="System.Diagnostics.Metrics.Meter"/> (metrics).
     /// </summary>
     /// <param name="name">
-    /// A unique name like <c>"MiEmpresa.RabbitMQ"</c>.
+    /// A unique name like <c>"Some.RabbitMQ"</c>.
     /// Must match what is passed to <c>AddSource()</c> and <c>AddMeter()</c>
     /// in the OpenTelemetry configuration.
     /// </param>
@@ -54,11 +54,11 @@ public sealed class RabbitMqBuilder
     /// <example>
     /// <code>
     /// services.AddRabbitMQ(configuration)
-    ///     .WithInstrumentationName("MiEmpresa.RabbitMQ");
+    ///     .WithInstrumentationName("Some.RabbitMQ");
     /// 
     /// services.AddOpenTelemetry()
-    ///     .WithTracing(t => t.AddSource("MiEmpresa.RabbitMQ"))
-    ///     .WithMetrics(m => m.AddMeter("MiEmpresa.RabbitMQ"));
+    ///     .WithTracing(t => t.AddSource("Some.RabbitMQ"))
+    ///     .WithMetrics(m => m.AddMeter("Some.RabbitMQ"));
     /// </code>
     /// </example>
     public RabbitMqBuilder WithInstrumentationName(string name)

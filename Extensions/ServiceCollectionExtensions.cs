@@ -83,7 +83,7 @@ public static class ServiceCollectionExtensions
         ///         ExchangeName = "orders"
         ///     });
         /// }, builder => builder
-        ///     .WithInstrumentationName("MiEmpresa.RabbitMQ"));
+        ///     .WithInstrumentationName("some.RabbitMQ"));
         /// </code>
         /// </example>
         public IServiceCollection AddRabbitMQ(Action<RabbitMqSettings> configureSettings, Action<RabbitMqBuilder>? configureBuilder = null)

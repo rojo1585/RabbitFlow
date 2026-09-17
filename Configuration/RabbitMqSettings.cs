@@ -12,16 +12,16 @@ namespace RabbitFlow.Configuration;
 /// <code>
 /// {
 ///   "RabbitMQ": {
-///     "InstrumentationName": "MiEmpresa.RabbitMQ",
+///     "InstrumentationName": "Some.RabbitMQ",
 ///     "Connections": {
-///       "mercedes": { "HostName": "...", "UserName": "...", ... },
-///       "evidencias": { "HostName": "...", "UserName": "...", ... }
+///       "some": { "HostName": "...", "UserName": "...", ... },
+///       "someTwo": { "HostName": "...", "UserName": "...", ... }
 ///     },
 ///     "Producers": [
-///       { "ServiceKey": "uber-delivered", "ConnectionName": "Some", ... }
+///       { "ServiceKey": "some-producer", "ConnectionName": "Some", ... }
 ///     ],
 ///     "Consumers": [
-///       { "ServiceKey": "uber-consumer", "ConnectionName": "SomeTwo", ... }
+///       { "ServiceKey": "some-consumer", "ConnectionName": "Some", ... }
 ///     ]
 ///   }
 /// }
