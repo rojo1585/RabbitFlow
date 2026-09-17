@@ -129,7 +129,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 channelOptions,
                 options.ChannelPoolSize,
                 logger,
-                onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new(RabbitMqMetrics.TagProducerKey, producerKey)));
+                onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
 
             _logger.LogInformation("[Producer:{Key}] Channel pooling ENABLED (size={PoolSize}, confirms={Confirms})", producerKey, options.ChannelPoolSize, options.EnablePublisherConfirms);
         }
@@ -549,7 +549,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private void RecordPoolRented()
     {
-        _metrics.ChannelPoolRented.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+        _metrics.ChannelPoolRented.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, _producerKey));
     }
 
     /// <summary>
@@ -557,7 +557,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private void RecordPoolReturned()
     {
-        _metrics.ChannelPoolReturned.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+        _metrics.ChannelPoolReturned.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, _producerKey));
     }
 
     /// <summary>
@@ -565,7 +565,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private void RecordPoolDiscarded()
     {
-        _metrics.ChannelPoolDiscarded.Add(1, new(RabbitMqMetrics.TagProducerKey, _producerKey));
+        _metrics.ChannelPoolDiscarded.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, _producerKey));
     }
 
     /// <summary>
