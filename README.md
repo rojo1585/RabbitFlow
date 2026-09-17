@@ -1,24 +1,89 @@
-Production-ready RabbitMQ client library for .NET 8/9 with multi-connection support, batch consumers, event versioning, and OpenTelemetry instrumentation.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/dotnet/brand/main/logo/dotnet-logo.svg" alt="RabbitFlow Logo" width="100" height="100" />
+  <h1 align="center">RabbitFlow</h1>
+  <p align="center">
+    <b>Enterprise-grade, high-throughput RabbitMQ client framework for .NET 8, 9, and 10</b>
+  </p>
+  <p align="center">
+    <a href="#-features">Features</a> •
+    <a href="#-architecture">Architecture</a> •
+    <a href="#-installation">Installation</a> •
+    <a href="#-quick-start">Quick Start</a> •
+    <a href="#-advanced-capabilities">Advanced Capabilities</a> •
+    <a href="#-configuration-reference">Configuration</a> •
+    <a href="#-observability--metrics">Metrics</a>
+  </p>
+</p>
 
-Features
-Multi-Connection: Connect to multiple RabbitMQ brokers/vhosts simultaneously
-Typed Handlers: DI-based dispatch via IRabbitHandler<T> and IBatchRabbitHandler<T>
-Batch Consumer: Buffer messages and process in batches with configurable size/timeout
-Event Versioning: Auto-upgrade old event versions to the latest via IEventUpgrader<TFrom, TTo> chains
-Retry + DLQ: Configurable retry with exponential delays and dead-letter queues
-Publisher Confirms: Reliable publishing with per-message ACK/NACK and timeout
-Channel Pooling: Reusable AMQP channels per producer — eliminates the #1 throughput bottleneck (channel-per-publish)
-OpenTelemetry: Built-in ActivitySource (tracing) and Meter (metrics)
-Health Checks: Per-connection and aggregate health check endpoints
-Configurable OTel Names: Use your own instrumentation name via WithInstrumentationName()
-Installation
-bash
+<p align="center">
+  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET Support" /></a>
+  <a href="https://www.nuget.org/packages/RabbitFlow"><img src="https://img.shields.io/nuget/v/RabbitFlow?style=for-the-badge&logo=nuget&color=004880" alt="NuGet Version" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
+  <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Enabled-008080?style=for-the-badge&logo=opentelemetry&logoColor=white" alt="OpenTelemetry Ready" /></a>
+</p>
 
-dotnet add package Apymsa.RabbitMQ
-Quick Start
-appsettings.json
-json
+---
 
+## ⚡ Features
+
+| Feature | Description |
+| :--- | :--- |
+| 🌐 **Multi-Broker Support** | Connect to multiple RabbitMQ brokers, clusters, or vhosts simultaneously within a single app. |
+| ⚡ **Channel Pooling** | High-throughput producer channel reuse using `SemaphoreSlim` backpressure — eliminates *channel-per-publish* overhead. |
+| 📦 **Batch Consumer** | Buffer high-volume messages in-memory and execute bulk processing with size/timeout triggers. |
+| 🔄 **Event Versioning** | Transparently upgrade legacy event schemas to latest contracts via `IEventUpgrader<TFrom, TTo>` chains. |
+| 🛡️ **Resilience & DLQ** | Built-in retry strategies with exponential backoff and automatic Dead-Letter Queue (DLQ) topology setup. |
+| 📊 **Native OpenTelemetry** | Out-of-the-box distributed tracing (`ActivitySource`) and custom metrics (`Meter`). |
+| 🩺 **Health Checks** | Native ASP.NET Core health check integration for individual connections and aggregate cluster health. |
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    subgraph Publisher App
+        P[Publisher Service] -->|Rent Channel| CP[Channel Pool]
+        CP -->|Publish Message| EX[RabbitMQ Exchange]
+    end
+
+    subgraph RabbitMQ Broker
+        EX -->|Route| Q1[Queue: orders.created]
+        EX -->|Route| Q2[Queue: notifications.pending]
+    end
+
+    subgraph Consumer App
+        Q1 -->|Consume| SC[Single Consumer]
+        Q2 -->|Buffer| BC[Batch Consumer]
+        
+        SC -->|Dispatch| H1[OrderCreatedHandler]
+        BC -->|Flush Batch| H2[NotificationBatchHandler]
+    end
+```
+
+---
+
+## 📦 Installation
+
+Install via .NET CLI:
+
+```bash
+dotnet add package RabbitFlow
+```
+
+Or Package Manager Console:
+
+```powershell
+Install-Package RabbitFlow
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1️⃣ Configuration (`appsettings.json`)
+
+```json
 {
   "RabbitMQ": {
     "Connections": {
@@ -36,7 +101,8 @@ json
         "ConnectionName": "main",
         "ExchangeName": "orders",
         "ExchangeType": "direct",
-        "RoutingKey": "order-created"
+        "RoutingKey": "order-created",
+        "ChannelPoolSize": 4
       }
     ],
     "Consumers": [
@@ -52,62 +118,92 @@ json
     ]
   }
 }
-Program.cs
-csharp
+```
 
-using Apymsa.RabbitMQ.Abstractions;
+---
 
-// Register RabbitMQ
+### 2️⃣ Dependency Injection (`Program.cs`)
+
+```csharp
+using RabbitFlow.Abstractions;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register RabbitMQ Core Services
 builder.Services.AddRabbitMQ(builder.Configuration);
 
-// Register handlers
+// Register Consumer Handlers
 builder.Services.AddRabbitHandler<OrderCreatedHandler>("orders-consumer");
 
-// Optional: Configure OpenTelemetry
+// Configure OpenTelemetry (Optional)
 builder.Services.AddOpenTelemetry()
     .WithTracing(t => t.AddSource(RabbitMqActivitySource.SourceName))
     .WithMetrics(m => m.AddMeter(RabbitMqMetrics.MeterName));
-Publish an Event
-csharp
 
-public class OrderCreatedEvent : IIntegrationEvent
+var app = builder.Build();
+app.Run();
+```
+
+---
+
+### 3️⃣ Publishing Messages
+
+```csharp
+using RabbitFlow.Abstractions;
+
+public record OrderCreatedEvent : IIntegrationEvent
 {
     public Guid OrderId { get; init; }
-    public string CustomerEmail { get; init; } = "";
+    public string CustomerEmail { get; init; } = string.Empty;
 }
 
-public class MyService(IEventPublisher publisher)
+public class OrderService(IEventPublisher publisher)
 {
-    public async Task CreateOrderAsync()
+    public async Task CreateOrderAsync(Guid orderId, string email)
     {
         await publisher.PublishAsync(new OrderCreatedEvent
         {
-            OrderId = Guid.NewGuid(),
-            CustomerEmail = "customer@example.com"
+            OrderId = orderId,
+            CustomerEmail = email
         });
     }
 }
-Handle an Event
-csharp
+```
 
-public class OrderCreatedHandler : IRabbitHandler<OrderCreatedEvent>
+---
+
+### 4️⃣ Consuming Messages
+
+```csharp
+using RabbitFlow.Abstractions;
+
+public class OrderCreatedHandler(ILogger<OrderCreatedHandler> logger) : IRabbitHandler<OrderCreatedEvent>
 {
     public string ConsumerKey => "orders-consumer";
-    private readonly ILogger<OrderCreatedHandler> _logger;
-
-    public OrderCreatedHandler(ILogger<OrderCreatedHandler> logger) => _logger = logger;
 
     public Task HandleAsync(OrderCreatedEvent @event, MessageContext context)
     {
-        _logger.LogInformation(
-            "Processing order {OrderId} (correlation={CorrelationId})",
-            @event.OrderId, context.CorrelationId);
+        logger.LogInformation(
+            "Processing Order {OrderId} | CorrelationId: {CorrelationId}",
+            @event.OrderId, 
+            context.CorrelationId);
+
         return Task.CompletedTask;
     }
 }
-Batch Consumer
-json
+```
 
+---
+
+## 💎 Advanced Capabilities
+
+### 📥 Batch Consumer
+
+Process high-throughput workloads (e.g., bulk database inserts) by accumulating messages in-memory.
+
+> **Tip:** Use batch processing when throughput exceeds **5,000 msg/sec** to drastically reduce I/O bottlenecks.
+
+```json
 {
   "Consumers": [{
     "ServiceKey": "notifications-batch",
@@ -121,63 +217,54 @@ json
     "PrefetchCount": 100
   }]
 }
-csharp
+```
 
+```csharp
 builder.Services.AddBatchRabbitHandler<NotificationBatchHandler>("notifications-batch");
 
 public class NotificationBatchHandler : IBatchRabbitHandler<NotificationEvent>
 {
     public string ConsumerKey => "notifications-batch";
 
-    public Task HandleBatchAsync(
+    public async Task HandleBatchAsync(
         IReadOnlyList<NotificationEvent> events,
         IReadOnlyList<MessageContext> contexts)
     {
-        // Bulk insert — much faster than individual processing
-        return Task.CompletedTask;
+        // Bulk Operation (e.g., EF Core AddRangeAsync / Dapper ExecuteAsync)
+        await SaveNotificationsToDbAsync(events);
     }
 }
-Channel Pooling
-By default, each producer maintains a pool of 4 AMQP channels that are reused across publishes.
-This eliminates the AMQP round-trip overhead of creating and closing a channel per message — the
-#1 throughput bottleneck in channel-per-publish strategies.
+```
 
-How it works
-Rent/Return: Each publish rents a channel from the pool, publishes, then returns it.
-Backpressure: A SemaphoreSlim gates concurrency. When all channels are rented, callers await.
-Health-aware: Closed channels (e.g. after connection loss) are discarded. Fresh ones are created on next rental.
-Faulted channels: After a publisher confirm timeout, the channel is in a dirty state and is discarded — never reused.
-Configuration
-json
+---
 
-{
-  "Producers": [{
-    "ServiceKey": "high-throughput",
-    "ConnectionName": "main",
-    "ExchangeName": "events",
-    "RoutingKey": "#",
-    "ChannelPoolSize": 8
-  }]
-}
-Pool Size
-Confirms
-Estimated Throughput
-4	Yes	40k–80k msg/s
-8	Yes	80k–150k msg/s
-4	No	100k–200k msg/s
-0	—	Channel-per-publish (backward compat)
+### 🏊 Channel Pooling
 
-Set ChannelPoolSize: 0 to disable pooling and revert to the channel-per-publish strategy.
+By default, each producer holds a managed pool of AMQP channels. Publishes rent a channel, execute the operation, and return it back to the pool.
 
-Event Versioning
-csharp
+> **Important:** Creating and destroying channels per publish is the **#1 cause of throughput limits** in AMQP applications. Channel pooling eliminates this latency entirely.
 
+| Pool Size | Publisher Confirms | Estimated Throughput |
+| :---: | :---: | :---: |
+| **4** | Enabled | `40,000` – `80,000` msg/s |
+| **8** | Enabled | `80,000` – `150,000` msg/s |
+| **4** | Disabled | `100,000` – `200,000` msg/s |
+| **0** | — | Channel-per-publish *(Backward compatibility)* |
+
+---
+
+### 🔀 Event Versioning
+
+Upgrade historical message contracts without disrupting running production consumers.
+
+```csharp
 [EventVersion("OrderCreated", 1)]
 public record OrderCreatedV1(Guid OrderId, string Email);
 
 [EventVersion("OrderCreated", 2)]
 public record OrderCreatedV2(Guid OrderId, string Email, string Phone);
 
+// Upgrader definition
 public class OrderV1ToV2Upgrader : IEventUpgrader<OrderCreatedV1, OrderCreatedV2>
 {
     public string EventName => "OrderCreated";
@@ -188,69 +275,5 @@ public class OrderV1ToV2Upgrader : IEventUpgrader<OrderCreatedV1, OrderCreatedV2
         => new(source.OrderId, source.Email, Phone: "N/A");
 }
 
-// Register
+// Registration
 builder.Services.AddEventUpgrader<OrderV1ToV2Upgrader>();
-Configuration
-Setting
-Default
-Description
-Connections	—	Named broker connections
-Producers	—	Exchange/routing per producer key
-Consumers	—	Queue/binding/retry per consumer key
-InstrumentationName	"RabbitMQ"	OTel ActivitySource & Meter name
-
-Producer Options
-Option
-Default
-Description
-ServiceKey	—	Unique producer identifier
-ConnectionName	—	Reference to a connection
-ExchangeName	—	Target exchange
-ExchangeType	"direct"	Exchange type
-RoutingKey	—	Default routing key
-Mandatory	true	Fail if unroutable
-EnablePublisherConfirms	true	Wait for broker ACK
-PublishConfirmTimeoutMs	5000	Confirm timeout
-AutoDeclareTopology	true	Auto-declare exchange
-ChannelPoolSize	4	Channel pool size (0 = channel-per-publish)
-
-Consumer Options
-Option
-Default
-Description
-ServiceKey	—	Unique consumer identifier
-ConnectionName	—	Reference to a connection
-QueueName	—	Queue to consume from
-PrefetchCount	10	AMQP prefetch window
-MaxConcurrentHandlers	0	Handler-level concurrency limit
-EnableRetry	true	Enable retry on failure
-MaxRetries	3	Max delivery attempts
-RetryDelays	[0s, 5s, 30s]	Delay per retry
-EnableDeadLetter	true	Configure DLX/DLQ
-EnableBatchConsumer	false	Use batch mode
-BatchSize	10	Messages per batch
-BatchTimeoutMs	5000	Batch flush timeout
-
-Metrics
-All metrics are exposed via System.Diagnostics.Metrics and collected by any OTel SDK:
-
-Metric
-Type
-Description
-rabbitmq.published	Counter	Messages published
-rabbitmq.publish_errors	Counter	Publish failures
-rabbitmq.consumed	Counter	Messages consumed
-rabbitmq.consume_errors	Counter	Handler failures
-rabbitmq.retried	Counter	Retried messages
-rabbitmq.dead_lettered	Counter	Dead-lettered messages
-rabbitmq.processing_duration_ms	Histogram	Handler execution time
-rabbitmq.publish_duration_ms	Histogram	Publish round-trip time
-rabbitmq.batches_dispatched	Counter	Batches dispatched (batch consumer)
-rabbitmq.batch_size	Histogram	Messages per batch
-rabbitmq.channel_pool.rented	Counter	Channel rentals from pool
-rabbitmq.channel_pool.returned	Counter	Channels returned to pool
-rabbitmq.channel_pool.discarded	Counter	Channels discarded (faulted)
-rabbitmq.channel_pool.created	Counter	New channels created by pool
-
-License
-MIT

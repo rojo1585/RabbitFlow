@@ -4,7 +4,6 @@ using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 
 namespace RabbitFlow.Infrastructure.Connection;
-
 /// <summary>
 /// Manages multiple named <see cref="ManagedConnection"/> instances.
 /// Implements <see cref="IRabbitConnectionRegistry"/> for health checks and status queries.
@@ -91,55 +90,23 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     }
 
     /// <summary>
-    /// Validates that all connection references in producers and consumers
-    /// point to existing connections. Called at registration time (Fase 12).
-    /// </summary>
-    /// <exception cref="Exceptions.RabbitMqConfigurationException">
-    /// Thrown when a reference points to a non-existent connection.
-    /// </exception>
-    internal void ValidateReferences()
-    {
-        foreach (var producer in _settings.Producers)
-            if (!_connections.ContainsKey(producer.ConnectionName))  
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Producer '{producer.ServiceKey}'", producer.ConnectionName);
-            
-        
-
-        foreach (var consumer in _settings.Consumers)
-            if (!_connections.ContainsKey(consumer.ConnectionName))
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Consumer '{consumer.ServiceKey}'", consumer.ConnectionName);
-    }
-
-    /// <summary>
     /// Creates <see cref="ManagedConnection"/> instances from the configuration.
     /// </summary>
     private void CreateManagedConnections()
     {
         if (_settings.Connections.Count == 0)
         {
-            _logger.LogWarning("No RabbitMQ connections configured in '{Section}'",
-                RabbitMqSettings.SectionName);
+            _logger.LogWarning("No RabbitMQ connections configured in '{Section}'", RabbitMqSettings.SectionName);
             return;
         }
 
-        // Validate no duplicate names
-        var duplicates = _settings.Connections.GroupBy(kvp => kvp.Key)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
-
-        if (duplicates.Count > 0)
-            throw Exceptions.RabbitMqConfigurationException.DuplicateConnectionName(string.Join(", ", duplicates));
-
-
         foreach (var (name, options) in _settings.Connections)
         {
-            var managed = new ManagedConnection(name, options,
-                _loggerFactory.CreateLogger<ManagedConnection>());
+            var managed = new ManagedConnection(name, options, _loggerFactory.CreateLogger<ManagedConnection>());
 
             _connections[name] = managed;
 
-            _logger.LogDebug("Registered connection '{Name}' → {Host}:{Port}/{VHost}",name, options.HostName, options.Port, options.VirtualHost);
+            _logger.LogDebug("Registered connection '{Name}' → {Host}:{Port}/{VHost}", name, options.HostName, options.Port, options.VirtualHost);
         }
     }
 
