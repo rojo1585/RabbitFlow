@@ -4,12 +4,8 @@ using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
 using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RabbitFlow.Infrastructure.Publishing;
-
 /// <summary>
 /// Facade that implements <see cref="IEventPublisher"/> and <see cref="IBatchEventPublisher"/>.
 /// Routes publish calls to the correct <see cref="NamedRabbitPublisher"/> based on the producer key.
@@ -37,22 +33,27 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     private readonly NamedRabbitPublisher? _defaultProducer;
     private bool _disposed;
 
-    public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, IEnumerable<RabbitProducerOptions> producerConfigs, ILoggerFactory loggerFactory, RabbitMqMetrics metrics)
+    public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry,
+                                   IMessageSerializer serializer,
+                                   IEnumerable<RabbitProducerOptions> producerConfigs,
+                                   ILoggerFactory loggerFactory,
+                                   RabbitMqMetrics metrics)
     {
         _logger = loggerFactory.CreateLogger<CompositeEventPublisher>();
         _producers = [];
 
         foreach (var config in producerConfigs)
         {
-            if (!_producers.TryAdd(config.ServiceKey, CreatePublisher(config, connectionRegistry, serializer, loggerFactory, metrics)))
-                throw RabbitMqConfigurationException.DuplicateProducerKey(config.ServiceKey);
+
+            _producers[config.ServiceKey] = CreatePublisher(config, connectionRegistry, serializer, loggerFactory, metrics);
 
             _logger.LogDebug("Registered producer '{Key}' → exchange '{Exchange}' on connection '{Connection}' (pool={PoolSize})", config.ServiceKey, config.ExchangeName, config.ConnectionName, config.ChannelPoolSize > 0 ? config.ChannelPoolSize.ToString() : "off");
         }
 
         if (_producers.Count == 1)
+        {
             _defaultProducer = _producers.Values.First();
-
+        }
 
         _logger.LogInformation("Composite publisher initialized with {Count} producer(s)", _producers.Count);
     }
@@ -93,12 +94,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// Factory method to create a <see cref="NamedRabbitPublisher"/> from config.
     /// Separated for readability in the constructor loop.
     /// </summary>
-    private static NamedRabbitPublisher CreatePublisher(
-        RabbitProducerOptions config,
-        RabbitConnectionRegistry connectionRegistry,
-        IMessageSerializer serializer,
-        ILoggerFactory loggerFactory,
-        RabbitMqMetrics metrics)
+    private static NamedRabbitPublisher CreatePublisher(RabbitProducerOptions config, RabbitConnectionRegistry connectionRegistry, IMessageSerializer serializer, ILoggerFactory loggerFactory, RabbitMqMetrics metrics)
     {
         var connection = connectionRegistry.GetConnection(config.ConnectionName);
         return new NamedRabbitPublisher(
@@ -111,28 +107,46 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     }
 
     /// <inheritdoc/>
-    public Task PublishAsync<TEvent>(TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    public Task PublishAsync<TEvent>(
+        TEvent @event,
+        string? routingKey = null,
+        CancellationToken cancellationToken = default)
+        where TEvent : class
     {
         var producer = ResolveDefaultProducer();
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    public Task PublishAsync<TEvent>(
+        string producerKey,
+        TEvent @event,
+        string? routingKey = null,
+        CancellationToken cancellationToken = default)
+        where TEvent : class
     {
         var producer = ResolveProducer(producerKey);
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    public Task PublishBatchAsync<TEvent>(
+        IEnumerable<TEvent> events,
+        string? routingKey = null,
+        CancellationToken cancellationToken = default)
+        where TEvent : class
     {
         var producer = ResolveDefaultProducer();
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishBatchAsync<TEvent>(string producerKey, IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    public Task PublishBatchAsync<TEvent>(
+        string producerKey,
+        IEnumerable<TEvent> events,
+        string? routingKey = null,
+        CancellationToken cancellationToken = default)
+        where TEvent : class
     {
         var producer = ResolveProducer(producerKey);
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);

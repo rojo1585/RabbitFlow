@@ -5,12 +5,8 @@ using Microsoft.Extensions.Options;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Versioning;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
@@ -20,17 +16,17 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// Supports both individual (<see cref="NamedRabbitConsumer"/>) and batch
 /// (<see cref="NamedBatchRabbitConsumer"/>) consumers based on configuration.
 /// </summary>
-public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connectionRegistry,
-                                                HandlerTypeRegistry _handlerRegistry,
-                                                IMessageSerializer _serializer,
-                                                IServiceScopeFactory _scopeFactory,
-                                                ILoggerFactory _loggerFactory,
-                                                RabbitMqMetrics _metrics,
-                                                EventUpgraderRegistry _upgraderRegistry,
-                                                IOptions<RabbitMqSettings> _settings) : BackgroundService
+public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connectionRegistry,
+                                                HandlerTypeRegistry handlerRegistry,
+                                                IMessageSerializer serializer,
+                                                IServiceScopeFactory scopeFactory,
+                                                ILoggerFactory loggerFactory,
+                                                RabbitMqMetrics metrics,
+                                                EventUpgraderRegistry upgraderRegistry,
+                                                IOptions<RabbitMqSettings> settings) : BackgroundService
 {
-    private readonly ILogger<RabbitConsumerHostedService> _logger = _loggerFactory.CreateLogger<RabbitConsumerHostedService>();
-    private readonly List<RabbitConsumerOptions> _consumerConfigs = _settings.Value.Consumers;
+    private readonly ILogger<RabbitConsumerHostedService> _logger = loggerFactory.CreateLogger<RabbitConsumerHostedService>();
+    private readonly List<RabbitConsumerOptions> _consumerConfigs = settings.Value.Consumers;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -40,17 +36,7 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connec
             return;
         }
 
-        var duplicateKeys = _consumerConfigs.GroupBy(c => c.ServiceKey)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
-
-        if (duplicateKeys.Count > 0)
-        {
-            throw new RabbitMqConfigurationException($"Duplicate consumer ServiceKey(s): [{string.Join(", ", duplicateKeys)}]. Each consumer must have a unique ServiceKey.");
-        }
-
-        _handlerRegistry.Freeze();
+        handlerRegistry.Freeze();
 
         _logger.LogInformation("Starting {Count} consumer(s)...", _consumerConfigs.Count);
 
@@ -58,21 +44,21 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connec
 
         foreach (var config in _consumerConfigs)
         {
-            var connection = _connectionRegistry.GetConnection(config.ConnectionName);
+            var connection = connectionRegistry.GetConnection(config.ConnectionName);
 
             if (config.EnableBatchConsumer)
             {
-                _logger.LogInformation("[Consumer:{Key}] Using BATCH mode (size={BatchSize}, timeout={TimeoutMs}ms) on queue '{Queue}'", config.ServiceKey, config.BatchSize, config.BatchTimeoutMs, config.QueueName);
+                _logger.LogInformation("[Consumer:{Key}] Using BATCH mode (size={BatchSize}, timeout={TimeoutMs}ms) on queue '{Queue}'",config.ServiceKey, config.BatchSize, config.BatchTimeoutMs, config.QueueName);
 
                 var batchConsumer = new NamedBatchRabbitConsumer(
                     consumerKey: config.ServiceKey,
                     options: config,
                     connection: connection,
-                    registry: _handlerRegistry,
-                    serializer: _serializer,
-                    scopeFactory: _scopeFactory,
-                    logger: _loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
-                    metrics: _metrics);
+                    registry: handlerRegistry,
+                    serializer: serializer,
+                    scopeFactory: scopeFactory,
+                    logger: loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
+                    metrics: metrics);
 
                 consumerTasks.Add(batchConsumer.RunAsync(stoppingToken));
             }
@@ -84,12 +70,12 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connec
                     consumerKey: config.ServiceKey,
                     options: config,
                     connection: connection,
-                    registry: _handlerRegistry,
-                    serializer: _serializer,
-                    scopeFactory: _scopeFactory,
-                    logger: _loggerFactory.CreateLogger<NamedRabbitConsumer>(),
-                    metrics: _metrics,
-                    upgraderRegistry: _upgraderRegistry);
+                    registry: handlerRegistry,
+                    serializer: serializer,
+                    scopeFactory: scopeFactory,
+                    logger: loggerFactory.CreateLogger<NamedRabbitConsumer>(),
+                    metrics: metrics,
+                    upgraderRegistry: upgraderRegistry);
 
                 consumerTasks.Add(consumer.RunAsync(stoppingToken));
             }
