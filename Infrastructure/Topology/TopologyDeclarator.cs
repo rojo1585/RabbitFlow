@@ -29,7 +29,7 @@ internal static class TopologyDeclarator
             type: options.ExchangeType,
             durable: true,
             autoDelete: false,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("[Producer:{Key}] Declared exchange '{Exchange}' ({Type})", options.ServiceKey, options.ExchangeName, options.ExchangeType);
     }
@@ -48,13 +48,13 @@ internal static class TopologyDeclarator
             type: options.ExchangeType,
             durable: true,
             autoDelete: false,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("[Consumer:{Key}] Declared exchange '{Exchange}' ({Type})", options.ServiceKey, options.ExchangeName, options.ExchangeType);
 
         // 2. Dead letter topology (before main queue, because main queue references DLX)
         if (options.EnableDeadLetter || options.EnableRetry)
-            await DeclareDeadLetterTopologyAsync(channel, options, logger, cancellationToken);
+            await DeclareDeadLetterTopologyAsync(channel, options, logger, cancellationToken).ConfigureAwait(false);
 
         // 3. Main queue (with x-dead-letter-exchange pointing to DLX)
         var queueArgs = new Dictionary<string, object?>();
@@ -68,14 +68,14 @@ internal static class TopologyDeclarator
             exclusive: false,
             autoDelete: false,
             arguments: queueArgs,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // 4. Bind queue to exchange
         await channel.QueueBindAsync(
             queue: options.QueueName,
             exchange: options.ExchangeName,
             routingKey: options.RoutingKey,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("[Consumer:{Key}] Declared queue '{Queue}' bound to '{Exchange}' with key '{RoutingKey}'", options.ServiceKey, options.QueueName, options.ExchangeName, options.RoutingKey);
     }
@@ -118,7 +118,7 @@ internal static class TopologyDeclarator
             type: "fanout",
             durable: true,
             autoDelete: false,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // 2. DLQ (final resting place for exhausted messages)
         await channel.QueueDeclareAsync(
@@ -126,7 +126,7 @@ internal static class TopologyDeclarator
             durable: true,
             exclusive: false,
             autoDelete: false,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         // Bind DLQ to DLX with queue name as routing key
         // The dead letter consumer will consume from this queue
@@ -134,7 +134,7 @@ internal static class TopologyDeclarator
             queue: dlqName,
             exchange: dlxName,
             routingKey: dlqName,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation("[Consumer:{Key}] Declared DLX '{Dlx}' → DLQ '{Dlq}'", options.ServiceKey, dlxName, dlqName);
 
@@ -164,14 +164,14 @@ internal static class TopologyDeclarator
                     exclusive: false,
                     autoDelete: false,
                     arguments: retryArgs,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Bind retry queue to DLX
                 await channel.QueueBindAsync(
                     queue: retryQueueName,
                     exchange: dlxName,
                     routingKey: retryQueueName,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 logger.LogInformation("[Consumer:{Key}] Declared retry queue '{RetryQueue}' (TTL={TTL}ms)", options.ServiceKey, retryQueueName, (int)delay.TotalMilliseconds);
             }
