@@ -109,7 +109,10 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
             _logger.LogDebug("Registered connection '{Name}' → {Host}:{Port}/{VHost}", name, options.HostName, options.Port, options.VirtualHost);
         }
     }
-
+    /// <summary>
+    /// Disposes all managed connections asynchronously.
+    /// </summary>
+    /// <returns></returns>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;

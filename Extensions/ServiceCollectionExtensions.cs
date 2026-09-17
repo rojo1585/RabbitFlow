@@ -17,7 +17,6 @@ public static class ServiceCollectionExtensions
         /// <summary>
         /// Registers all RabbitMQ services from <see cref="IConfiguration"/>.
         /// </summary>
-        /// <param name="services">The service collection.</param>
         /// <param name="configuration">The application configuration.</param>
         /// <param name="sectionName">
         /// Configuration section name. Defaults to <see cref="RabbitMqSettings.SectionName"/> (<c>"RabbitMQ"</c>).
@@ -60,7 +59,6 @@ public static class ServiceCollectionExtensions
         /// <summary>
         /// Registers all RabbitMQ services with code-based configuration.
         /// </summary>
-        /// <param name="services">The service collection.</param>
         /// <param name="configureSettings">Action to configure <see cref="RabbitMqSettings"/> programmatically.</param>
         /// <param name="configureBuilder">
         /// Optional builder callback for serializer, instrumentation name, etc.

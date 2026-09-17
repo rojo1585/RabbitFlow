@@ -587,7 +587,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// <summary>
     /// Extracts the W3C traceparent from AMQP headers and returns
     /// the <see cref="ActivityContext"/> to use as parent for consumer activities.
-    /// Falls back to <see cref="Activity.Current?.Context"/> if no header is present.
     /// </summary>
     private static ActivityContext ExtractParentContext(IReadOnlyBasicProperties properties)
     {
