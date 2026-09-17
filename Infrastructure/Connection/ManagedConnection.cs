@@ -67,8 +67,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <exception cref="ObjectDisposedException">Thrown if this instance has been disposed.</exception>
     public void Start()
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(ManagedConnection));
+        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
 
         _loopCts = new CancellationTokenSource();
         _loopTask = Task.Run(() => ConnectionLoopAsync(_loopCts.Token));
@@ -97,20 +96,13 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <exception cref="TimeoutException">
     /// Thrown if no connection is available within the timeout.
     /// </exception>
-    public async Task<IChannel> CreateChannelAsync(
-        CreateChannelOptions? channelOptions = null,
-        CancellationToken cancellationToken = default,
-        TimeSpan? timeout = null)
+    public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null,  TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(ManagedConnection));
+        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
 
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
         using var timeoutCts = new CancellationTokenSource(effectiveTimeout);
-        using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            timeoutCts.Token,
-            _loopCts?.Token ?? CancellationToken.None,
-            cancellationToken);
+        using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, _loopCts?.Token ?? CancellationToken.None, cancellationToken);
 
         try
         {
@@ -123,7 +115,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
                 {
                     try
                     {
-                        var channel = await conn.CreateChannelAsync(channelOptions, combinedCts.Token);
+                        var channel = await conn.CreateChannelAsync(channelOptions, combinedCts.Token).ConfigureAwait(false);
                         _logger.LogDebug("[{Name}] Channel #{ChannelNumber} created", Name, channel.ChannelNumber);
                         return channel;
                     }
@@ -133,7 +125,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
                     }
                 }
 
-                await Task.Delay(200, combinedCts.Token);
+                await Task.Delay(200, combinedCts.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
@@ -154,13 +146,13 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         {
             try
             {
-                await TryConnectAsync(cancellationToken);
+                await TryConnectAsync(cancellationToken).ConfigureAwait(false);
 
                 var closedTcs = _connectionClosedTcs;
                 if (closedTcs is not null)
                 {
-                    await using var reg = cancellationToken.Register(() => closedTcs.TrySetCanceled());
-                    await closedTcs.Task;
+                    await using var reg = cancellationToken.Register(() => closedTcs.TrySetCanceled()).ConfigureAwait(false);
+                    await closedTcs.Task.ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -175,7 +167,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
             if (!cancellationToken.IsCancellationRequested)
             {
-                await BackoffDelayAsync(cancellationToken);
+                await BackoffDelayAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -207,7 +199,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         _logger.LogInformation("[{Name}] Connecting to {Host}:{Port}{Tls}...", Name, _options.HostName, _options.Port, _options.Tls is { Enabled: true } ? " (TLS)" : "");
 
-        var connection = await factory.CreateConnectionAsync(cancellationToken);
+        var connection = await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
 
         var closedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -225,7 +217,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         if (wasDisposed)
         {
-            await connection.CloseAsync();
+            await connection.CloseAsync().ConfigureAwait(false);
             return;
         }
 
@@ -268,7 +260,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         _logger.LogInformation("[{Name}] Reconnecting in {Delay}s...", Name, delay.TotalSeconds);
 
-        await Task.Delay(delay, cancellationToken);
+        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
 
         _backoffSeconds = Math.Min(_backoffSeconds * 2, _options.MaxBackoffSeconds);
     }
@@ -352,7 +344,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             {
                 try
                 {
-                    await Task.WhenAny(_loopTask, Task.Delay(2000));
+                    await Task.WhenAny(_loopTask, Task.Delay(2000)).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -385,7 +377,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         {
             try
             {
-                await connToClose.CloseAsync();
+                await connToClose.CloseAsync().ConfigureAwait(false);
                 _logger.LogInformation("[{Name}] Connection closed (disposed)", Name);
             }
             catch (Exception ex)

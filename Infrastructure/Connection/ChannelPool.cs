@@ -139,7 +139,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         if (_disposed)
             throw new ObjectDisposedException(nameof(ChannelPool));
 
-        await _semaphore.WaitAsync(cancellationToken);
+        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -152,10 +152,10 @@ internal sealed class ChannelPool : IAsyncDisposable
                 }
 
                 Interlocked.Decrement(ref _currentCount);
-                await SafeCloseAsync(channel);
+                await SafeCloseAsync(channel).ConfigureAwait(false);
             }
 
-            var newChannel = await _connection.CreateChannelAsync(_channelOptions, cancellationToken);
+            var newChannel = await _connection.CreateChannelAsync(_channelOptions,  cancellationToken: cancellationToken).ConfigureAwait(false);
 
             Interlocked.Increment(ref _currentCount);
             _onChannelCreated?.Invoke();
@@ -242,7 +242,7 @@ internal sealed class ChannelPool : IAsyncDisposable
     {
         try
         {
-            await channel.CloseAsync();
+            await channel.CloseAsync().ConfigureAwait(false);
         }
         catch (AlreadyClosedException) { }
         catch (ObjectDisposedException) { }
@@ -262,7 +262,7 @@ internal sealed class ChannelPool : IAsyncDisposable
 
         while (_available.TryDequeue(out var channel))
         {
-            await SafeCloseAsync(channel);
+            await SafeCloseAsync(channel).ConfigureAwait(false);
         }
 
         _semaphore.Dispose();

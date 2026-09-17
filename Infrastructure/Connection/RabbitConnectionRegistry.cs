@@ -151,7 +151,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
         _logger.LogInformation("Disposing {Count} connection(s)...", _connections.Count);
 
         var tasks = _connections.Values.Select(c => c.DisposeAsync().AsTask()).ToArray();
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
 
         _connections.Clear();
     }

@@ -111,46 +111,28 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     }
 
     /// <inheritdoc/>
-    public Task PublishAsync<TEvent>(
-        TEvent @event,
-        string? routingKey = null,
-        CancellationToken cancellationToken = default)
-        where TEvent : class
+    public Task PublishAsync<TEvent>(TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
         var producer = ResolveDefaultProducer();
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishAsync<TEvent>(
-        string producerKey,
-        TEvent @event,
-        string? routingKey = null,
-        CancellationToken cancellationToken = default)
-        where TEvent : class
+    public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
         var producer = ResolveProducer(producerKey);
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishBatchAsync<TEvent>(
-        IEnumerable<TEvent> events,
-        string? routingKey = null,
-        CancellationToken cancellationToken = default)
-        where TEvent : class
+    public Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
         var producer = ResolveDefaultProducer();
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task PublishBatchAsync<TEvent>(
-        string producerKey,
-        IEnumerable<TEvent> events,
-        string? routingKey = null,
-        CancellationToken cancellationToken = default)
-        where TEvent : class
+    public Task PublishBatchAsync<TEvent>(string producerKey, IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
         var producer = ResolveProducer(producerKey);
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);
@@ -167,7 +149,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
         _logger.LogInformation("Disposing {Count} publisher(s)...", _producers.Count);
 
         var tasks = _producers.Values.Select(p => p.DisposeAsync().AsTask()).ToArray();
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
 
         _producers.Clear();
     }
