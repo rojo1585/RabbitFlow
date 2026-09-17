@@ -103,6 +103,30 @@ public sealed class RabbitMqMetrics
     public Histogram<int> BatchSize { get; }
 
     /// <summary>
+    /// Number of channel rentals from publisher channel pools.
+    /// <para>Tags: <c>producer_key</c></para>
+    /// </summary>
+    public Counter<long> ChannelPoolRented { get; }
+
+    /// <summary>
+    /// Number of channels returned to publisher channel pools.
+    /// <para>Tags: <c>producer_key</c></para>
+    /// </summary>
+    public Counter<long> ChannelPoolReturned { get; }
+
+    /// <summary>
+    /// Number of channels discarded from publisher channel pools (faulted/dirty).
+    /// <para>Tags: <c>producer_key</c></para>
+    /// </summary>
+    public Counter<long> ChannelPoolDiscarded { get; }
+
+    /// <summary>
+    /// Number of new channels created by publisher channel pools.
+    /// <para>Tags: <c>producer_key</c></para>
+    /// </summary>
+    public Counter<long> ChannelPoolCreated { get; }
+
+    /// <summary>
     /// Creates a new <see cref="RabbitMqMetrics"/> instance with the given meter name.
     /// Typically registered as a singleton in DI.
     /// </summary>
@@ -163,6 +187,26 @@ public sealed class RabbitMqMetrics
             name: "rabbitmq.batch_size",
             unit: "{message}",
             description: "Size of each dispatched batch.");
+
+        ChannelPoolRented = _meter.CreateCounter<long>(
+            name: "rabbitmq.channel_pool.rented",
+            unit: "{operation}",
+            description: "Number of channel rentals from publisher channel pools.");
+
+        ChannelPoolReturned = _meter.CreateCounter<long>(
+            name: "rabbitmq.channel_pool.returned",
+            unit: "{operation}",
+            description: "Number of channels returned to publisher channel pools.");
+
+        ChannelPoolDiscarded = _meter.CreateCounter<long>(
+            name: "rabbitmq.channel_pool.discarded",
+            unit: "{operation}",
+            description: "Number of channels discarded from publisher channel pools (faulted/dirty).");
+
+        ChannelPoolCreated = _meter.CreateCounter<long>(
+            name: "rabbitmq.channel_pool.created",
+            unit: "{channel}",
+            description: "Number of new channels created by publisher channel pools.");
     }
 
     /// <summary>

@@ -1,6 +1,5 @@
 ﻿namespace RabbitFlow.Configuration;
 
-
 /// <summary>
 /// Defines a message producer bound to a specific exchange and connection.
 /// The <see cref="ServiceKey"/> is used to route publish calls to the correct producer.
@@ -67,4 +66,36 @@ public sealed class RabbitProducerOptions
     /// Defaults to true.
     /// </summary>
     public bool AutoDeclareTopology { get; init; } = true;
+
+    /// <summary>
+    /// Size of the channel pool for this producer.
+    ///
+    /// <para>
+    /// When greater than 0, channels are reused across publishes instead of
+    /// being created and destroyed per publish. This eliminates the AMQP
+    /// round-trip overhead of channel creation — the #1 throughput bottleneck
+    /// in channel-per-publish strategies.
+    /// </para>
+    ///
+    /// <para>
+    /// The pool uses a rent/return pattern: each publish rents a channel from
+    /// the pool, uses it, and returns it. A <see cref="System.Threading.SemaphoreSlim"/>
+    /// gates concurrency — when all channels are rented, callers await until
+    /// one is returned (natural backpressure).
+    /// </para>
+    ///
+    /// <para>
+    /// Recommended values:
+    /// <list type="bullet">
+    ///   <item>4–8 for publisher-confirms channels (good for 40k–200k msg/s).</item>
+    ///   <item>2–4 for fire-and-forget channels (higher per-channel throughput).</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// Set to 0 to disable pooling and revert to the channel-per-publish strategy
+    /// (backward compatible). Defaults to 4.
+    /// </para>
+    /// </summary>
+    public int ChannelPoolSize { get; init; } = 4;
 }

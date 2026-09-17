@@ -41,7 +41,7 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         };
 
         var json = JsonSerializer.Serialize(envelope, _options);
-        return System.Text.Encoding.UTF8.GetBytes(json);
+        return System.Text.Encoding.UTF8.GetBytes(json); 
     }
 
     /// <inheritdoc/>
