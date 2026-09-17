@@ -35,7 +35,7 @@ namespace RabbitFlow.Diagnostics;
 /// </summary>
 public static class RabbitMqActivitySource
 {
-    private static readonly Lock Lock = new();
+    private static readonly object Lock = new();
 
     /// <summary>
     /// The name used to register the <see cref="ActivitySource"/>.
