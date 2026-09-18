@@ -41,28 +41,45 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         };
 
         var json = JsonSerializer.Serialize(envelope, _options);
-        return System.Text.Encoding.UTF8.GetBytes(json); 
+        return System.Text.Encoding.UTF8.GetBytes(json);
     }
 
     /// <inheritdoc/>
     public T? Deserialize<T>(ReadOnlyMemory<byte> data)
     {
-        var envelope = DeserializeEnvelope(data);
-        if (envelope?.Payload is null) return default;
+        try
+        {
+            var envelope = DeserializeEnvelope(data);
+            if (envelope?.Payload is null) return default;
 
-        // Payload comes back as JsonElement (System.Text.Json doesn't know the type)
-        var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
-        return JsonSerializer.Deserialize<T>(payloadJson, _options);
+            if (envelope.Payload is JsonElement element)
+                return element.Deserialize<T>(_options);
+
+            return default;
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
     }
 
     /// <inheritdoc/>
     public object? Deserialize(ReadOnlyMemory<byte> data, Type type)
     {
-        var envelope = DeserializeEnvelope(data);
-        if (envelope?.Payload is null) return null;
+        try
+        {
+            var envelope = DeserializeEnvelope(data);
+            if (envelope?.Payload is null) return null;
 
-        var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
-        return JsonSerializer.Deserialize(payloadJson, type, _options);
+            if (envelope.Payload is JsonElement element)
+                return element.Deserialize(type, _options);
+
+            return type.IsInstanceOfType(envelope.Payload) ? envelope.Payload : null;
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
     }
 
     /// <summary>
@@ -72,8 +89,8 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
     /// </summary>
     public MessageEnvelope? DeserializeEnvelope(ReadOnlyMemory<byte> data)
     {
-        var json = System.Text.Encoding.UTF8.GetString(data.Span);
-        return JsonSerializer.Deserialize<MessageEnvelope>(json, _options);
+        if (data.IsEmpty) return null;
+        return JsonSerializer.Deserialize<MessageEnvelope>(data.Span, _options);
     }
 
     /// <summary>
@@ -86,14 +103,20 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
     /// </returns>
     public (MessageEnvelope Envelope, JsonElement Payload)? DeserializeWithPayload(ReadOnlyMemory<byte> data)
     {
-        var envelope = DeserializeEnvelope(data);
-        if (envelope is null) return null;
+        try
+        {
+            var envelope = DeserializeEnvelope(data);
+            if (envelope is null) return null;
 
-        if (envelope.Payload is JsonElement element)
-            return (envelope, element);
+            if (envelope.Payload is JsonElement element)
+                return (envelope, element);
 
-        var payloadJson = JsonSerializer.Serialize(envelope.Payload, _options);
-        var element2 = JsonSerializer.Deserialize<JsonElement>(payloadJson);
-        return (envelope, element2);
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    
     }
 }
