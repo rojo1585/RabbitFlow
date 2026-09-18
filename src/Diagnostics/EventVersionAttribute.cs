@@ -16,11 +16,11 @@
 /// </remarks>
 /// <example>
 /// <code>
-/// [EventVersion("UberDelivered", 1)]
-/// public record UberDeliveredEvent(int BranchId, int ShipmentId);
+/// [EventVersion("OrderCreated", 1)]
+/// public record OrderCreatedEvent(int OrderId, decimal Amount);
 /// 
-/// [EventVersion("UberDelivered", 2)]
-/// public record UberDeliveredEventV2(int BranchId, int ShipmentId, string TrackingUrl);
+/// [EventVersion("OrderCreated", 2)]
+/// public record OrderCreatedEventV2(int OrderId, decimal Amount, string CustomerId);
 /// </code>
 /// </example>
 /// <remarks>

@@ -7,7 +7,7 @@
 /// The <see cref="ServiceKey"/> is used to map <see cref="Abstractions.IRabbitHandler{T}"/>
 /// or <see cref="Abstractions.IBatchRabbitHandler{T}"/> implementations to the correct consumer.
 /// </summary>
-public sealed class RabbitConsumerOptions
+public sealed record RabbitConsumerOptions
 {
     /// <summary>
     /// Unique identifier for this consumer.
