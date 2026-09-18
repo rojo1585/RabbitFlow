@@ -40,7 +40,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
                                    RabbitMqMetrics metrics)
     {
         _logger = loggerFactory.CreateLogger<CompositeEventPublisher>();
-        _producers = new Dictionary<string, NamedRabbitPublisher>();
+        _producers = [];
 
         foreach (var config in producerConfigs)
         {

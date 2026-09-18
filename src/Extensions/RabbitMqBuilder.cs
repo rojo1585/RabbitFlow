@@ -133,7 +133,8 @@ public sealed class RabbitMqBuilder
         _services.AddSingleton(new RabbitMqMetrics(instrName));
 
         // 3. Connection Registry
-        _services.AddSingleton<IRabbitConnectionRegistry, RabbitConnectionRegistry>(sp =>sp.GetRequiredService<RabbitConnectionRegistry>());
+
+        _services.AddSingleton<IRabbitConnectionRegistry, RabbitConnectionRegistry>();
 
         // 4. Handler Registry
         _services.AddSingleton<HandlerTypeRegistry>();
