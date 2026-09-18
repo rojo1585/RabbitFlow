@@ -166,7 +166,11 @@ internal sealed class ChannelPool : IAsyncDisposable
         }
         catch
         {
-            _semaphore.Release();
+            if (!_disposed)
+            {
+                try { _semaphore.Release(); }
+                catch (ObjectDisposedException) { }
+            }
             throw;
         }
     }
@@ -192,9 +196,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         {
             _available.Enqueue(channel);
 
-            _logger.LogDebug(
-                "[ChannelPool] Returned channel #{Number} to pool (available={Available}, total={Total})",
-                channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
+            _logger.LogDebug("[ChannelPool] Returned channel #{Number} to pool (available={Available}, total={Total})",channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
         }
 
         try { _semaphore.Release(); }
@@ -219,8 +221,11 @@ internal sealed class ChannelPool : IAsyncDisposable
 
         _logger.LogDebug("[ChannelPool] Discarded channel #{Number} (available={Available}, total={Total})", channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
 
-        try { _semaphore.Release(); }
-        catch (ObjectDisposedException) { }
+        if (!_disposed)
+        {
+            try { _semaphore.Release(); }
+            catch (ObjectDisposedException) { }
+        }
     }
 
     /// <summary>
@@ -238,15 +243,20 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// <summary>
     /// Safely closes a channel, ignoring errors if already closed or disposed.
     /// </summary>
-    private static async Task SafeCloseAsync(IChannel channel)
+    private  async Task SafeCloseAsync(IChannel channel)
     {
         try
         {
-            await channel.CloseAsync().ConfigureAwait(false);
+            if (channel.IsOpen)
+            {
+                await channel.CloseAsync().ConfigureAwait(false);
+            }
+            channel.Dispose();
         }
-        catch (AlreadyClosedException) { }
-        catch (ObjectDisposedException) { }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[ChannelPool] Error closing channel.");
+        }
     }
 
     /// <summary>
@@ -258,6 +268,22 @@ internal sealed class ChannelPool : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
 
+
+        _logger.LogInformation("[ChannelPool] Disposing. Waiting for in-flight channels to return...");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        for (var i = 0; i < MaxSize; i++)
+        {
+            try
+            {
+                await _semaphore.WaitAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("[ChannelPool] Graceful shutdown timed out ({Acquired}/{Total} channels returned). Forcing closure.",i, MaxSize);
+                break;
+            }
+        }
         _logger.LogInformation("[ChannelPool] Disposing (closing {Count} idle channels)...", _available.Count);
 
         while (_available.TryDequeue(out var channel))
