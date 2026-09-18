@@ -9,6 +9,7 @@ namespace RabbitFlow.Abstractions
     /// Wrapper structure serialized into the message body.
     /// Separates metadata (event type, version, tracing) from the payload,
     /// allowing the consumer to deserialize without prior knowledge of the type.
+    /// </summary>
     public sealed class MessageEnvelope
     {
         /// <summary>

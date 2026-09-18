@@ -11,22 +11,23 @@ using RabbitFlow.Infrastructure.Versioning;
 namespace RabbitFlow.Infrastructure.Consuming;
 
 
+
 /// <summary>
 /// <see cref="BackgroundService"/> that starts and manages all configured consumers.
 /// Supports both individual (<see cref="NamedRabbitConsumer"/>) and batch
 /// (<see cref="NamedBatchRabbitConsumer"/>) consumers based on configuration.
 /// </summary>
-public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connectionRegistry,
-                                                HandlerTypeRegistry handlerRegistry,
-                                                IMessageSerializer serializer,
-                                                IServiceScopeFactory scopeFactory,
-                                                ILoggerFactory loggerFactory,
-                                                RabbitMqMetrics metrics,
-                                                EventUpgraderRegistry upgraderRegistry,
-                                                IOptions<RabbitMqSettings> settings) : BackgroundService
+public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connectionRegistry,
+                                                HandlerTypeRegistry _handlerRegistry,
+                                                IMessageSerializer _serializer,
+                                                IServiceScopeFactory _scopeFactory,
+                                                ILoggerFactory _loggerFactory,
+                                                RabbitMqMetrics _metrics,
+                                                EventUpgraderRegistry _upgraderRegistry,
+                                                IOptions<RabbitMqSettings> _settings) : BackgroundService
 {
-    private readonly ILogger<RabbitConsumerHostedService> _logger = loggerFactory.CreateLogger<RabbitConsumerHostedService>();
-    private readonly List<RabbitConsumerOptions> _consumerConfigs = settings.Value.Consumers;
+    private readonly ILogger<RabbitConsumerHostedService> _logger = _loggerFactory.CreateLogger<RabbitConsumerHostedService>();
+    private readonly List<RabbitConsumerOptions> _consumerConfigs = _settings.Value.Consumers;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -36,7 +37,7 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connect
             return;
         }
 
-        handlerRegistry.Freeze();
+        _handlerRegistry.Freeze();
 
         _logger.LogInformation("Starting {Count} consumer(s)...", _consumerConfigs.Count);
 
@@ -44,7 +45,7 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connect
 
         foreach (var config in _consumerConfigs)
         {
-            var connection = connectionRegistry.GetConnection(config.ConnectionName);
+            var connection = _connectionRegistry.GetConnection(config.ConnectionName);
 
             if (config.EnableBatchConsumer)
             {
@@ -54,11 +55,11 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connect
                     consumerKey: config.ServiceKey,
                     options: config,
                     connection: connection,
-                    registry: handlerRegistry,
-                    serializer: serializer,
-                    scopeFactory: scopeFactory,
-                    logger: loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
-                    metrics: metrics);
+                    registry: _handlerRegistry,
+                    serializer: _serializer,
+                    scopeFactory: _scopeFactory,
+                    logger: _loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
+                    metrics: _metrics);
 
                 consumerTasks.Add(batchConsumer.RunAsync(stoppingToken));
             }
@@ -70,12 +71,12 @@ public sealed class RabbitConsumerHostedService(RabbitConnectionRegistry connect
                     consumerKey: config.ServiceKey,
                     options: config,
                     connection: connection,
-                    registry: handlerRegistry,
-                    serializer: serializer,
-                    scopeFactory: scopeFactory,
-                    logger: loggerFactory.CreateLogger<NamedRabbitConsumer>(),
-                    metrics: metrics,
-                    upgraderRegistry: upgraderRegistry);
+                    registry: _handlerRegistry,
+                    serializer: _serializer,
+                    scopeFactory: _scopeFactory,
+                    logger: _loggerFactory.CreateLogger<NamedRabbitConsumer>(),
+                    metrics: _metrics,
+                    upgraderRegistry: _upgraderRegistry);
 
                 consumerTasks.Add(consumer.RunAsync(stoppingToken));
             }

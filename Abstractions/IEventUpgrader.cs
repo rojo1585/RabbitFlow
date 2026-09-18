@@ -14,6 +14,8 @@ namespace RabbitFlow.Abstractions
     /// registered version before passing it to the handler.
     /// <typeparam name="TFrom">The older event type (source).</typeparam>
     /// <typeparam name="TTo">The newer event type (target).</typeparam>
+    /// </para>
+    /// </summary>
     public interface IEventUpgrader<TFrom, TTo> where TFrom : class where TTo : class
     {
         /// <summary>

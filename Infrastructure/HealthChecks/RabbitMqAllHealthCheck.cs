@@ -31,7 +31,7 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// <para>
 /// Registered via <c>AddRabbitMqAll()</c> which tags it with <c>"rabbitmq"</c>.
 /// </para>
-/// </summary>
+
 /// <summary>
 /// Creates a combined health check for all configured connections.
 /// </summary>

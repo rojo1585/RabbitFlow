@@ -2,7 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace RabbitFlow.Infrastructure.Serializartion;
+namespace RabbitFlow.Infrastructure.Serialization;
 
 /// <summary>
 /// Default message serializer using System.Text.Json.

@@ -7,14 +7,12 @@ using RabbitFlow.Diagnostics;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Consuming;
 using RabbitFlow.Infrastructure.Publishing;
-using RabbitFlow.Infrastructure.Serializartion;
+using RabbitFlow.Infrastructure.Serialization;
 using RabbitFlow.Infrastructure.Versioning;
-using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json;
 
 namespace RabbitFlow.Extensions;
+
 
 
 /// <summary>
@@ -112,13 +110,17 @@ public sealed class RabbitMqBuilder
             ?? RabbitMqSettings.DefaultInstrumentationName;
 
         // 1. Configuration (include InstrumentationName so IOptions works)
-        _services.Configure<RabbitMqSettings>(settings =>
-        {
-            settings.Connections = _settings.Connections;
-            settings.Producers = _settings.Producers;
-            settings.Consumers = _settings.Consumers;
-            settings.InstrumentationName = instrName;
-        });
+        _services.AddOptions<RabbitMqSettings>()
+            .Configure(settings =>
+            {
+                settings.Connections = _settings.Connections;
+                settings.Producers = _settings.Producers;
+                settings.Consumers = _settings.Consumers;
+                settings.InstrumentationName = instrName;
+            })
+            .ValidateOnStart();
+
+        _services.AddSingleton<IValidateOptions<RabbitMqSettings>, ValidateRabbitMqSettings>();
 
         // 2. Diagnostics — initialize ActivitySource (static) + register Metrics (DI)
         RabbitMqActivitySource.Initialize(instrName);
@@ -126,8 +128,7 @@ public sealed class RabbitMqBuilder
 
         // 3. Connection Registry
         _services.AddSingleton<RabbitConnectionRegistry>();
-        _services.AddSingleton<IRabbitConnectionRegistry>(sp =>
-            sp.GetRequiredService<RabbitConnectionRegistry>());
+        _services.AddSingleton<IRabbitConnectionRegistry>(sp =>sp.GetRequiredService<RabbitConnectionRegistry>());
 
         // 4. Handler Registry
         _services.AddSingleton<HandlerTypeRegistry>();
@@ -148,17 +149,13 @@ public sealed class RabbitMqBuilder
             var metrics = sp.GetRequiredService<RabbitMqMetrics>();
             return new CompositeEventPublisher(registry, serializer, settings.Producers, loggerFactory, metrics);
         });
-        _services.AddSingleton<IEventPublisher>(sp =>
-            sp.GetRequiredService<CompositeEventPublisher>());
-        _services.AddSingleton<IBatchEventPublisher>(sp =>
-            sp.GetRequiredService<CompositeEventPublisher>());
+        _services.AddSingleton<IEventPublisher>(sp =>sp.GetRequiredService<CompositeEventPublisher>());
+        _services.AddSingleton<IBatchEventPublisher>(sp =>sp.GetRequiredService<CompositeEventPublisher>());
 
         // 7. Hosted Services (order matters)
         _services.AddHostedService<ConnectionInitializerHostedService>();
         _services.AddHostedService<RabbitConsumerHostedService>();
 
-        // 8. Validation
-        ValidateConfiguration();
     }
 
     private void RegisterSerializer()
@@ -187,56 +184,6 @@ public sealed class RabbitMqBuilder
         }
 
         _services.AddSingleton<IMessageSerializer, SystemTextJsonSerializer>();
-    }
-
-    private void ValidateConfiguration()
-    {
-        if (_settings.Connections.Count == 0 && (_settings.Producers.Count > 0 || _settings.Consumers.Count > 0))
-            throw new Exceptions.RabbitMqConfigurationException("Producers or consumers are configured but no connections are defined.");
-
-
-        var duplicateConnectionNames = _settings.Connections
-            .GroupBy(kvp => kvp.Key)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
-
-        if (duplicateConnectionNames.Count > 0)
-            throw Exceptions.RabbitMqConfigurationException.DuplicateConnectionName(string.Join(", ", duplicateConnectionNames));
-
-
-        var duplicateProducerKeys = _settings.Producers
-            .GroupBy(p => p.ServiceKey)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
-
-        if (duplicateProducerKeys.Count > 0)
-            throw new Exceptions.RabbitMqConfigurationException(
-                $"Duplicate producer ServiceKey(s): [{string.Join(", ", duplicateProducerKeys)}]. Each producer must have a unique ServiceKey.");
-
-
-        foreach (var producer in _settings.Producers)
-        {
-            if (!_settings.Connections.ContainsKey(producer.ConnectionName))
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Producer '{producer.ServiceKey}'", producer.ConnectionName);
-        }
-
-        var duplicateConsumerKeys = _settings.Consumers
-            .GroupBy(c => c.ServiceKey)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
-
-        if (duplicateConsumerKeys.Count > 0)
-            throw new Exceptions.RabbitMqConfigurationException($"Duplicate consumer ServiceKey(s): [{string.Join(", ", duplicateConsumerKeys)}]. Each consumer must have a unique ServiceKey.");
-
-
-        foreach (var consumer in _settings.Consumers)
-        {
-            if (!_settings.Connections.ContainsKey(consumer.ConnectionName))
-                throw Exceptions.RabbitMqConfigurationException.MissingConnection($"Consumer '{consumer.ServiceKey}'", consumer.ConnectionName);
-        }
     }
 
     private void AssertSerializerNotConfigured()
