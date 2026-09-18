@@ -1,4 +1,5 @@
-﻿using System;
+﻿using RabbitFlow.Infrastructure.Connection;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -29,5 +30,21 @@ namespace RabbitFlow.Abstractions
         /// indicates whether it is currently connected.
         /// </returns>
         IReadOnlyDictionary<string, bool> GetAllConnectionStates();
+        /// <summary>
+        /// Gets a managed connection by name.
+        /// Throws if the connection name is not registered.
+        /// </summary>
+        /// <param name="connectionName">The connection name.</param>
+        /// <returns>The managed connection.</returns>
+        /// <exception cref="Exceptions.ConnectionNotFoundException">
+        /// Thrown when the connection name is not found.
+        /// </exception>
+        ManagedConnection GetConnection(string connectionName);
+        /// <summary>
+        /// Starts all managed connections. Called by the hosted service at startup.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">Thrown if called more than once.</exception>
+        void StartAll();
+
     }
 }

@@ -31,7 +31,7 @@ namespace RabbitFlow.Diagnostics;
 /// </code>
 /// </para>
 /// </summary>
-public sealed class RabbitMqMetrics
+public sealed class RabbitMqMetrics : IDisposable
 {
     /// <summary>
     /// The meter name resolved at construction time.

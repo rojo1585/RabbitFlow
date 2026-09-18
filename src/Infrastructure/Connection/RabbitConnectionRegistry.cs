@@ -16,7 +16,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// </summary>
 public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsyncDisposable
 {
-    private readonly Dictionary<string, ManagedConnection> _connections = new();
+    private readonly Dictionary<string, ManagedConnection> _connections = [];
     private readonly ILogger<RabbitConnectionRegistry> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly RabbitMqSettings _settings;
@@ -36,15 +36,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
         CreateManagedConnections();
     }
 
-    /// <summary>
-    /// Gets a managed connection by name.
-    /// Throws if the connection name is not registered.
-    /// </summary>
-    /// <param name="connectionName">The connection name.</param>
-    /// <returns>The managed connection.</returns>
-    /// <exception cref="Exceptions.ConnectionNotFoundException">
-    /// Thrown when the connection name is not found.
-    /// </exception>
+    /// <inheritdoc/>
     public ManagedConnection GetConnection(string connectionName)
     {
         if (_connections.TryGetValue(connectionName, out var conn))
@@ -69,10 +61,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
         return _connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.IsConnected);
     }
 
-    /// <summary>
-    /// Starts all managed connections. Called by the hosted service at startup.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown if called more than once.</exception>
+    /// <inheritdoc/>
     public void StartAll()
     {
         if (_started)

@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
@@ -104,6 +106,10 @@ public sealed class RabbitMqBuilder
     /// </summary>
     internal void Build()
     {
+        // Add logging services if not already registered
+        _services.TryAddSingleton<ILoggerFactory, NullLoggerFactory>();
+        _services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(NullLogger<>)));
+
         // Resolve the instrumentation name: builder override > settings > default
         var instrName = _instrumentationName
             ?? _settings.InstrumentationName
@@ -143,13 +149,13 @@ public sealed class RabbitMqBuilder
         _services.AddSingleton<CompositeEventPublisher>(sp =>
         {
             var settings = sp.GetRequiredService<IOptions<RabbitMqSettings>>().Value;
-            var registry = sp.GetRequiredService<RabbitConnectionRegistry>();
+            var registry = sp.GetRequiredService<IRabbitConnectionRegistry>();
             var serializer = sp.GetRequiredService<IMessageSerializer>();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var metrics = sp.GetRequiredService<RabbitMqMetrics>();
             return new CompositeEventPublisher(registry, serializer, settings.Producers, loggerFactory, metrics);
         });
-        _services.AddSingleton<IEventPublisher>(sp =>sp.GetRequiredService<CompositeEventPublisher>());
+        _services.AddSingleton<IEventPublisher>(sp => sp.GetRequiredService<CompositeEventPublisher>());
         _services.AddSingleton<IBatchEventPublisher>(sp =>sp.GetRequiredService<CompositeEventPublisher>());
 
         // 7. Hosted Services (order matters)
