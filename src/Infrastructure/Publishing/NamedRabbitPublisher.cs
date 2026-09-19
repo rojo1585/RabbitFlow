@@ -17,7 +17,6 @@ using System.Text;
 
 namespace RabbitFlow.Infrastructure.Publishing;
 
-
 /// <summary>
 /// Publishes events to a single RabbitMQ exchange using a named connection.
 /// Each instance corresponds to one <see cref="RabbitProducerOptions"/> entry.
@@ -342,7 +341,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null,cancellationToken: cancellationToken).ConfigureAwait(false);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -499,6 +498,10 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 basicProperties: properties,
                 body: body,
                 cancellationToken: linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (PublishException ex)
+        {
+            throw new PublisherNackException(_producerKey, ex.PublishSequenceNumber, ex.IsReturn, ex);
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {

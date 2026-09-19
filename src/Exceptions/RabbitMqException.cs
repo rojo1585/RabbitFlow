@@ -20,5 +20,5 @@ public class RabbitMqException : Exception
     /// </summary>
     /// <param name="message"></param>
     /// <param name="innerException"></param>
-    public RabbitMqException(string message, Exception innerException) : base(message, innerException) { }
+    public RabbitMqException(string message, Exception? innerException) : base(message, innerException) { }
 }

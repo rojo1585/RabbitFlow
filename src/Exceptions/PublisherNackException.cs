@@ -7,16 +7,23 @@ namespace RabbitFlow.Exceptions
 
     /// <summary>
     /// Thrown when the broker nacks a published message or returns it as unroutable.
-    /// 
+    ///
     /// <para>
     /// In RabbitMQ.Client v7, this wraps <c>RabbitMQ.Client.Exceptions.PublishException</c>
     /// which is thrown by <c>BasicPublishAsync</c> when publisher confirmation tracking is enabled
     /// and the broker responds with a nack or basic.return.
     /// </para>
+    ///
+    /// <para>
+    /// Callers should catch <see cref="PublisherNackException"/> instead of the underlying
+    /// <c>PublishException</c> to avoid a hard dependency on the RabbitMQ.Client driver.
+    /// The <see cref="IsReturn"/> property distinguishes a basic.return (unroutable message)
+    /// from a basic.nack (broker rejected the message), and <see cref="PublishSequenceNumber"/>
+    /// correlates the failure with the broker's publish sequence.
+    /// </para>
     /// </summary>
     public sealed class PublisherNackException(string producerKey, ulong publishSequenceNumber, bool isReturn, Exception? innerException = null) :
-        RabbitMqException(isReturn? $"Publisher '{producerKey}': message #{publishSequenceNumber} was returned as unroutable (no matching queue binding on the exchange)." : $"Publisher '{producerKey}': message #{publishSequenceNumber} was nacked by the broker.",
-            innerException ?? new Exception($"Publisher '{producerKey}': message #{publishSequenceNumber} failed without an inner exception."))
+        RabbitMqException(isReturn ? $"Publisher '{producerKey}': message #{publishSequenceNumber} was returned as unroutable (no matching queue binding on the exchange)." : $"Publisher '{producerKey}': message #{publishSequenceNumber} was nacked by the broker.", innerException)
     {
         /// <summary>
         /// The producer that sent the nacked message.
