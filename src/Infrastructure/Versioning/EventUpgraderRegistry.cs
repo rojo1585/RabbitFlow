@@ -7,7 +7,7 @@ namespace RabbitFlow.Infrastructure.Versioning;
 /// <summary>
 /// Describes a registered upgrader: from version, to version, upgrader type, and the compiled upgrade function.
 /// </summary>
-internal sealed record UpgraderEntry(string EventName, int FromVersion, int ToVersion, Type FromType, Type ToType, Type UpgraderType, Func<object, object, object> UpgradeFunc);
+public sealed record UpgraderEntry(string EventName, int FromVersion, int ToVersion, Type FromType, Type ToType, Type UpgraderType, Func<object, object, object> UpgradeFunc);
 
 /// <summary>
 /// Registry that holds all <see cref="IEventUpgrader{TFrom, TTo}"/> implementations.
@@ -52,7 +52,7 @@ public sealed class EventUpgraderRegistry
     /// </summary>
     private readonly Dictionary<string, Type> _latestTypes;
 
-    internal EventUpgraderRegistry(IEnumerable<UpgraderEntry> entries)
+    public EventUpgraderRegistry(IEnumerable<UpgraderEntry> entries)
     {
         var chains = new Dictionary<string, List<UpgraderEntry>>();
         var versionTypes = new Dictionary<(string, int), Type>();

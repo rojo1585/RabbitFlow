@@ -19,7 +19,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// by <c>NamedRabbitPublisher</c> in the <c>x-event-type</c> header.
 /// </param>
 /// <param name="IsBatch">Whether this is a batch handler (<c>IBatchRabbitHandler&lt;T&gt;</c>).</param>
-internal sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName, bool IsBatch = false);
+public sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName, bool IsBatch = false);
 
 /// <summary>
 /// Maps (consumerKey, eventTypeName) to (handlerType, eventType, isBatch) at runtime.
@@ -50,7 +50,7 @@ public sealed class HandlerTypeRegistry
     /// Using <see cref="IEnumerable{T}"/> instead of <see cref="IServiceProvider"/>
     /// follows the explicit dependencies principle (avoids service locator anti-pattern).
     /// </param>
-    internal HandlerTypeRegistry(IEnumerable<HandlerRegistration> registrations)
+    public HandlerTypeRegistry(IEnumerable<HandlerRegistration> registrations)
     {
         var lookup = new Dictionary<(string, string), (Type, Type, bool)>();
 
