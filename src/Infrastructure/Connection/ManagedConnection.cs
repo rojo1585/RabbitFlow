@@ -5,7 +5,6 @@ using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 
 namespace RabbitFlow.Infrastructure.Connection;
-
 /// <summary>
 /// Manages a single named RabbitMQ connection with automatic reconnection
 /// and exponential backoff.
@@ -96,7 +95,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <exception cref="TimeoutException">
     /// Thrown if no connection is available within the timeout.
     /// </exception>
-    public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null,  TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
 
@@ -189,6 +188,28 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             VirtualHost = _options.VirtualHost,
             RequestedHeartbeat = TimeSpan.FromSeconds(_options.RequestedHeartbeatSeconds),
             ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
+
+            // Disable the driver's built-in auto-recovery. This class owns the reconnection
+            // lifecycle (see ConnectionLoopAsync): when the connection drops, OnConnectionShutdown
+            // signals _connectionClosedTcs, the loop wakes up, applies exponential backoff, and
+            // creates a brand-new IConnection via TryConnectAsync.
+            //
+            // If AutomaticRecoveryEnabled were left at its default (true), the driver would
+            // concurrently try to recover the SAME IConnection (re-establish TCP, re-create
+            // channels, re-declare topology) while this class also creates a new one. The two
+            // recoveries race: the driver's recovered connection is eventually closed when the
+            // new connection wins, channels in the pool point at the dying connection, and
+            // in-flight messages can be lost during the transition. Disabling auto-recovery
+            // ensures exactly one reconnection path — this loop — so there is a single source
+            // of truth for the live IConnection.
+            //
+            // TopologyRecoveryEnabled is also disabled for the same reason: with auto-recovery
+            // off, topology recovery never runs anyway, but setting it explicitly documents the
+            // intent and prevents surprises if auto-recovery is ever re-enabled in the future.
+            // Topology is re-declared idempotently by publishers and consumers on each new
+            // connection (see TopologyDeclarator), so no recovery is needed from the driver.
+            AutomaticRecoveryEnabled = false,
+            TopologyRecoveryEnabled = false,
         };
 
         if (_options.Tls is { Enabled: true })
