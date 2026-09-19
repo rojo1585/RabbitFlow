@@ -26,13 +26,13 @@ public class RetryPolicyTests
         var policy = new RetryPolicy(CreateConsumerOptions(maxRetries: 3));
         policy.ShouldRetry(1).Should().BeTrue();
         policy.ShouldRetry(2).Should().BeTrue();
-        policy.ShouldRetry(3).Should().BeTrue();
     }
 
     [Fact]
-    public void ShouldRetry_ReturnsFalse_WhenExceedsMax()
+    public void ShouldRetry_ReturnsFalse_WhenAtOrExceedsMax()
     {
         var policy = new RetryPolicy(CreateConsumerOptions(maxRetries: 3));
+        policy.ShouldRetry(3).Should().BeFalse();
         policy.ShouldRetry(4).Should().BeFalse();
         policy.ShouldRetry(5).Should().BeFalse();
     }

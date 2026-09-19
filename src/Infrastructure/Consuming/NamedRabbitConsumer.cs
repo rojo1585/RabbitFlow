@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
@@ -10,16 +9,13 @@ using RabbitFlow.Infrastructure.Versioning;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Data.Common;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
-using System.Threading.RateLimiting;
 
 namespace RabbitFlow.Infrastructure.Consuming;
+
 
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them to
@@ -245,9 +241,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             }
         }
         else
-        {
             await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext).ConfigureAwait(false);
-        }
     }
 
     private async Task InvokeHandlerWithRetryAsync(Type handlerType,
@@ -313,7 +307,32 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     new(RabbitMqMetrics.TagAttempt, deliveryCount));
 
                 _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
-                await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+
+                // Client-side retry: publish the message to the appropriate retry queue
+                // (via the default exchange, routing key = retry queue name) and ACK the
+                // original delivery. The retry queue has a TTL and x-dead-letter-exchange
+                // pointing back to the main exchange, so once the TTL expires the broker
+                // re-delivers the message to the main queue.
+                //
+                // Previously, a NACK(requeue=false) was used to trigger retry, but the
+                // main queue's x-dead-letter-exchange routed the message through a fanout
+                // DLX that delivered it to BOTH the DLQ and every retry queue, causing
+                // exponential amplification. Client-side publish guarantees exactly one
+                // copy lands in exactly one retry queue.
+                var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
+                var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay).ConfigureAwait(false);
+
+                if (publishSucceeded)
+                {
+                    await AckAsync(deliveryTag).ConfigureAwait(false);
+                }
+                else
+                {
+                    // Retry publish failed (broker/channel issue). Fall back to NACK with
+                    // requeue=true so the broker redelivers the message immediately,
+                    // preserving at-least-once semantics without losing the message.
+                    await NackAsync(deliveryTag, requeue: true).ConfigureAwait(false);
+                }
             }
             else
             {
@@ -324,8 +343,20 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
 
                 _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+
+                // NACK with requeue=false triggers broker-side dead-lettering via the
+                // main queue's x-dead-letter-exchange (a "direct" DLX bound to the DLQ
+                // with the "dead" routing key). The message lands in the DLQ exactly once.
+                //
+                // Previously, the client ALSO re-published the message to the DLQ here,
+                // producing a duplicate copy (the "double DLQ" bug). The client-side
+                // publish has been removed; the broker is the sole writer to the DLQ.
                 await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
-                await DeadLetterMessageAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+
+                // Invoke the (optional) IDeadLetterHandler for application-level
+                // notification (e.g., alerting, audit). This does NOT re-publish the
+                // message; the broker has already dead-lettered it to the DLQ.
+                await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
             }
         }
     }
@@ -335,35 +366,54 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         return _retryPolicy is not null && _retryPolicy.ShouldRetry(deliveryCount);
     }
 
-    private async Task DeadLetterMessageAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception handlerException, int deliveryCount)
+    /// <summary>
+    /// Publishes a message to the retry queue that corresponds to the given delay.
+    /// Uses the default AMQP exchange (empty string) with the retry queue name as
+    /// routing key. The retry queue has a TTL and x-dead-letter-exchange pointing
+    /// back to the main exchange, so the message is re-delivered to the main queue
+    /// after the TTL expires.
+    /// </summary>
+    /// <returns><c>true</c> if the publish succeeded; <c>false</c> if the broker or channel was unavailable.</returns>
+    private async Task<bool> PublishToRetryQueueAsync(ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, TimeSpan delay)
     {
-        if (_options.EnableDeadLetter)
+        // Resolve the retry queue name from the delay. A delay of Zero maps to the
+        // "0s" retry queue (which has a 1ms TTL — see TopologyDeclarator).
+        var retryQueueName = $"{_options.QueueName}.retry.{(int)delay.TotalSeconds}s";
+
+        IChannel? retryChannel = null;
+        try
         {
-            try
-            {
-                var dlqChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
-                try
-                {
-                    await dlqChannel.BasicPublishAsync(
-                        exchange: string.Empty,
-                        routingKey: _options.ResolvedDlqName,
-                        mandatory: false,
-                        basicProperties: (BasicProperties)properties,
-                        body: body).ConfigureAwait(false);
+            retryChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
+            await retryChannel.BasicPublishAsync(
+                exchange: string.Empty,
+                routingKey: retryQueueName,
+                mandatory: false,
+                basicProperties: (BasicProperties)properties,
+                body: body).ConfigureAwait(false);
 
-                    _logger.LogInformation("[Consumer:{Key}] Dead-lettered to '{Dlq}' (deliveryTag={Tag})", _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
-                }
-                finally
-                {
-                    await SafeCloseChannelAsync(dlqChannel).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[Consumer:{Key}] Failed to dead-letter to '{Dlq}' (deliveryTag={Tag})", _consumerKey, _options.ResolvedDlqName, ea.DeliveryTag);
-            }
+            _logger.LogInformation("[Consumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
+            return true;
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Consumer:{Key}] Failed to publish to retry queue '{RetryQueue}'", _consumerKey, retryQueueName);
+            return false;
+        }
+        finally
+        {
+            if (retryChannel is not null)
+                await SafeCloseChannelAsync(retryChannel).ConfigureAwait(false);
+        }
+    }
 
+    /// <summary>
+    /// Invokes the (optional) <see cref="IDeadLetterHandler"/> registered for this consumer.
+    /// This is purely an application-level notification — the message has already been
+    /// dead-lettered to the DLQ by the broker via the main queue's x-dead-letter-exchange.
+    /// This method does NOT re-publish the message.
+    /// </summary>
+    private async Task InvokeDeadLetterHandlerAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception handlerException, int deliveryCount)
+    {
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -445,10 +495,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var eParam = Expression.Parameter(typeof(object), "e");
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
 
-        var call = Expression.Call(Expression.Convert(hParam, handlerInterface),
-            handleMethod,
-            Expression.Convert(eParam, eventType),
-            cParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam);
 
         return Expression.Lambda<Func<object, object, MessageContext, Task>>(call, hParam, eParam, cParam).Compile();
     }

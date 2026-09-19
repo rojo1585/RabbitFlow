@@ -19,6 +19,7 @@ using System.Threading.Channels;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
+
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them in batches
 /// to registered <see cref="IBatchRabbitHandler{TEvent}"/> implementations.
@@ -44,8 +45,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// Caches compiled batch handler invokers per handler type.
     /// Avoids reflection on every batch dispatch.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>
-        BatchHandlerInvokers = new();
+    private static readonly ConcurrentDictionary<Type, Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>> BatchHandlerInvokers = new();
 
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
@@ -363,7 +363,19 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                     new(RabbitMqMetrics.TagQueue, _options.QueueName),
                     new(RabbitMqMetrics.TagAttempt, deliveryCount));
 
-                await NackMultipleAsync(channel, deliveryTags, requeue: false).ConfigureAwait(false);
+                var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
+                var allPublished = true;
+                foreach (var msg in batch)
+                {
+                    var published = await PublishToRetryQueueAsync(msg.Body, msg.Properties, retryDelay).ConfigureAwait(false);
+                    if (!published) allPublished = false;
+                }
+
+                if (allPublished)
+                    await AckMultipleAsync(channel, deliveryTags).ConfigureAwait(false);
+                else
+                    await NackMultipleAsync(channel, deliveryTags, requeue: true).ConfigureAwait(false);
+
             }
             else
             {
@@ -373,11 +385,21 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                     new(RabbitMqMetrics.TagQueue, _options.QueueName),
                     new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
 
+                // NACK with requeue=false triggers broker-side dead-lettering via the
+                // main queue's x-dead-letter-exchange (a "direct" DLX bound to the DLQ
+                // with the "dead" routing key). Each message lands in the DLQ exactly once.
+                //
+                // Previously, the client ALSO re-published each message to the DLQ here,
+                // producing duplicate copies (the "double DLQ" bug). The client-side
+                // publish has been removed; the broker is the sole writer to the DLQ.
                 await NackMultipleAsync(channel, deliveryTags, requeue: false).ConfigureAwait(false);
 
+                // Invoke the (optional) IDeadLetterHandler for each message for
+                // application-level notification (e.g., alerting, audit). This does NOT
+                // re-publish the messages; the broker has already dead-lettered them.
                 foreach (var msg in batch)
                 {
-                    await DeadLetterMessageAsync(msg, ex, deliveryCount).ConfigureAwait(false);
+                    await InvokeDeadLetterHandlerAsync(msg, ex, deliveryCount).ConfigureAwait(false);
                 }
             }
         }
@@ -467,42 +489,59 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
 
         var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, castEvents, cParam);
 
-        return Expression.Lambda<Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>(
-            call, hParam, eParam, cParam).Compile();
+        return Expression.Lambda<Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>(call, hParam, eParam, cParam).Compile();
     }
     private bool ShouldRetry(int deliveryCount)
     {
         return _retryPolicy is not null && _retryPolicy.ShouldRetry(deliveryCount);
     }
 
-    private async Task DeadLetterMessageAsync(BufferedMessage msg, Exception handlerException, int deliveryCount)
+    /// <summary>
+    /// Publishes a message to the retry queue that corresponds to the given delay.
+    /// Uses the default AMQP exchange (empty string) with the retry queue name as
+    /// routing key. The retry queue has a TTL and x-dead-letter-exchange pointing
+    /// back to the main exchange, so the message is re-delivered to the main queue
+    /// after the TTL expires.
+    /// </summary>
+    /// <returns><c>true</c> if the publish succeeded; <c>false</c> if the broker or channel was unavailable.</returns>
+    private async Task<bool> PublishToRetryQueueAsync(ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, TimeSpan delay)
     {
-        if (!_options.EnableDeadLetter) return;
+        var retryQueueName = $"{_options.QueueName}.retry.{(int)delay.TotalSeconds}s";
 
+        IChannel? retryChannel = null;
         try
         {
-            var dlqChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
-            try
-            {
-                await dlqChannel.BasicPublishAsync(
-                    exchange: string.Empty,
-                    routingKey: _options.ResolvedDlqName,
-                    mandatory: false,
-                    basicProperties: (BasicProperties)msg.Properties,
-                    body: msg.Body).ConfigureAwait(false);
+            retryChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
+            await retryChannel.BasicPublishAsync(
+                exchange: string.Empty,
+                routingKey: retryQueueName,
+                mandatory: false,
+                basicProperties: (BasicProperties)properties,
+                body: body).ConfigureAwait(false);
 
-                _logger.LogInformation("[BatchConsumer:{Key}] Dead-lettered message (deliveryTag={Tag}) → '{Dlq}'", _consumerKey, msg.DeliveryTag, _options.ResolvedDlqName);
-            }
-            finally
-            {
-                await SafeCloseChannelAsync(dlqChannel).ConfigureAwait(false);
-            }
+            _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
+            return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[BatchConsumer:{Key}] Failed to dead-letter (deliveryTag={Tag})", _consumerKey, msg.DeliveryTag);
+            _logger.LogError(ex, "[BatchConsumer:{Key}] Failed to publish to retry queue '{RetryQueue}'", _consumerKey, retryQueueName);
+            return false;
         }
+        finally
+        {
+            if (retryChannel is not null)
+                await SafeCloseChannelAsync(retryChannel).ConfigureAwait(false);
+        }
+    }
 
+    /// <summary>
+    /// Invokes the (optional) <see cref="IDeadLetterHandler"/> registered for this consumer.
+    /// This is purely an application-level notification — the message has already been
+    /// dead-lettered to the DLQ by the broker via the main queue's x-dead-letter-exchange.
+    /// This method does NOT re-publish the message.
+    /// </summary>
+    private async Task InvokeDeadLetterHandlerAsync(BufferedMessage msg, Exception handlerException, int deliveryCount)
+    {
         try
         {
             using var scope = _scopeFactory.CreateScope();
@@ -552,9 +591,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
 
         try
         {
-            await channel.BasicNackAsync(deliveryTag: deliveryTags[^1],
-                multiple: true,
-                requeue: requeue).ConfigureAwait(false);
+            await channel.BasicNackAsync(deliveryTag: deliveryTags[^1], multiple: true, requeue: requeue).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -578,10 +615,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     }
     private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
     {
-        await channel.BasicQosAsync(prefetchSize: 0,
-            prefetchCount: _options.PrefetchCount,
-            global: false,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: _options.PrefetchCount, global: false, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         await TopologyDeclarator.DeclareConsumerTopologyAsync(channel, _options, _logger, cancellationToken).ConfigureAwait(false);
     }
@@ -653,18 +687,11 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         return Activity.Current?.Context ?? default;
     }
 
-    private Activity? StartConsumeActivity(
-        string eventTypeName,
-        BasicDeliverEventArgs ea,
-        ActivityContext parentContext,
-        string operation)
+    private Activity? StartConsumeActivity(string eventTypeName, BasicDeliverEventArgs ea, ActivityContext parentContext, string operation)
     {
         var links = parentContext != default ? new[] { new ActivityLink(parentContext) } : null;
 
-        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}",
-            ActivityKind.Consumer,
-            parentContext: default,
-            links: links);
+        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}", ActivityKind.Consumer, parentContext: default, links: links);
 
         if (activity is null) return null;
 
