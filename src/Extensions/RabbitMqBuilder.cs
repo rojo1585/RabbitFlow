@@ -30,6 +30,13 @@ public sealed class RabbitMqBuilder
     private Action<JsonSerializerOptions>? _jsonOptionsConfigure;
     private string? _instrumentationName;
 
+    /// <summary>
+    /// Marker singleton used to detect multiple <c>AddRabbitMQ</c> calls on the same
+    /// <see cref="IServiceCollection"/>. Private nested so it cannot be accidentally
+    /// registered or removed by external code.
+    /// </summary>
+    private sealed class ConfiguredMarker { }
+
     internal RabbitMqBuilder(IServiceCollection services, RabbitMqSettings settings)
     {
         _services = services;
@@ -104,8 +111,29 @@ public sealed class RabbitMqBuilder
     /// Registers all RabbitMQ services into DI.
     /// Called internally by <c>AddRabbitMQ</c>.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if <c>AddRabbitMQ</c> has already been called on the same <see cref="IServiceCollection"/>.
+    /// Multiple calls are not supported because they would silently overwrite the first call's
+    /// connections/producers/consumers, replace the <c>HandlerTypeRegistry</c> (losing registered
+    /// handlers), and leak the first <c>RabbitMqMetrics</c> instance. Multi-broker support is
+    /// achieved within a single <c>AddRabbitMQ</c> call by adding multiple entries to the
+    /// <c>Connections</c> dictionary.
+    /// </exception>
     internal void Build()
     {
+        if (_services.Any(d => d.ServiceType == typeof(ConfiguredMarker)))
+        {
+            throw new InvalidOperationException(
+                "AddRabbitMQ has already been called on this service collection. " +
+                "Multiple AddRabbitMQ calls are not supported because they would silently " +
+                "overwrite the first call's configuration, replace the HandlerTypeRegistry " +
+                "(losing registered handlers), and leak the first RabbitMqMetrics instance. " +
+                "To connect to multiple brokers, vhosts, or clusters, add multiple entries " +
+                "to the Connections dictionary in a single AddRabbitMQ call instead.");
+        }
+
+        _services.AddSingleton<ConfiguredMarker>();
+
         // Add logging services if not already registered
         _services.TryAddSingleton<ILoggerFactory, NullLoggerFactory>();
         _services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(NullLogger<>)));
@@ -156,7 +184,7 @@ public sealed class RabbitMqBuilder
             return new CompositeEventPublisher(registry, serializer, settings.Producers, loggerFactory, metrics);
         });
         _services.AddSingleton<IEventPublisher>(sp => sp.GetRequiredService<CompositeEventPublisher>());
-        _services.AddSingleton<IBatchEventPublisher>(sp =>sp.GetRequiredService<CompositeEventPublisher>());
+        _services.AddSingleton<IBatchEventPublisher>(sp => sp.GetRequiredService<CompositeEventPublisher>());
 
         // 7. Hosted Services (order matters)
         _services.AddHostedService<ConnectionInitializerHostedService>();
