@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using RabbitFlow.Abstractions;
+using RabbitFlow.Exceptions;
 
 namespace RabbitFlow.Infrastructure.Versioning;
-
 
 /// <summary>
 /// Describes a registered upgrader: from version, to version, upgrader type, and the compiled upgrade function.
@@ -61,6 +61,22 @@ public sealed class EventUpgraderRegistry
 
         foreach (var entry in entries)
         {
+            // An upgrader MUST increase the version (ToVersion > FromVersion).
+            // This prevents:
+            //   - Self-loops (V1 → V1)
+            //   - Downgrades (V3 → V2)
+            //   - Cycles (V1 → V2 → V1, or V1 → V2 → V3 → V1)
+            // In any cycle, at least one upgrader must decrease the version to return
+            // to the starting point, so this single check eliminates all possible cycles.
+            if (entry.ToVersion <= entry.FromVersion)
+            {
+                throw new InvalidOperationException(
+                    $"Event '{entry.EventName}' upgrader v{entry.FromVersion}→v{entry.ToVersion} is invalid: " +
+                    $"ToVersion must be strictly greater than FromVersion. " +
+                    $"Downgrades, self-loops, and cycles are not allowed because they cause silent data corruption " +
+                    $"(Upgrade would return a lower version than the handler expects).");
+            }
+
             // Track all version types
             versionTypes[(entry.EventName, entry.FromVersion)] = entry.FromType;
             versionTypes[(entry.EventName, entry.ToVersion)] = entry.ToType;
@@ -133,7 +149,7 @@ public sealed class EventUpgraderRegistry
 
     /// <summary>
     /// Upgrades an event from the given version to the latest registered version.
-    /// Returns the original event (unmodified) if no upgrade is needed.
+    /// Returns the original event (unmodified) if it is already at the latest version.
     /// </summary>
     /// <param name="eventName">The logical event name.</param>
     /// <param name="event">The deserialized event (may be an older version).</param>
@@ -143,13 +159,23 @@ public sealed class EventUpgraderRegistry
     /// Typically the scoped <see cref="IServiceProvider"/> of the current message processing scope.
     /// </param>
     /// <returns>The event upgraded to the latest version, or the original if already latest.</returns>
+    /// <exception cref="EventVersionNewerThanRegisteredException">
+    /// Thrown when <paramref name="fromVersion"/> is greater than the highest registered version.
+    /// This indicates a producer-publishes-newer-schema-than-consumer-knows scenario.
+    /// The caller (typically the consumer's poison-message handler) should route the message
+    /// to the retry queue / DLQ rather than silently feeding a newer schema to a handler
+    /// expecting the latest known version.
+    /// </exception>
     public object Upgrade(string eventName, object @event, int fromVersion, IServiceProvider serviceProvider)
     {
         var highest = GetHighestVersion(eventName);
-        if (fromVersion >= highest || !_chains.TryGetValue(eventName, out var chain))
+
+        if (fromVersion > highest)
+            throw new EventVersionNewerThanRegisteredException(eventName, fromVersion, highest);
+
+        if (fromVersion == highest || !_chains.TryGetValue(eventName, out var chain))
             return @event;
 
-        // Find the starting point in the chain and apply successive upgraders
         object current = @event;
         foreach (var entry in chain)
         {

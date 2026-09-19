@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using RabbitFlow.Diagnostics;
+using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Versioning;
 using System;
 using System.Collections.Generic;
@@ -194,6 +195,100 @@ public class EventUpgraderRegistryTests
         var act = () => new EventUpgraderRegistry(entries);
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("*not continuous*");
+    }
+
+    [Fact]
+    public void Constructor_Throws_WhenUpgraderIsSelfLoop()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 1, 1, typeof(OrderV1), typeof(OrderV1), typeof(object), (_, e) => e)
+        };
+
+        var act = () => new EventUpgraderRegistry(entries);
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*ToVersion must be strictly greater than FromVersion*");
+    }
+
+    [Fact]
+    public void Constructor_Throws_WhenUpgraderIsDowngrade()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 3, 2, typeof(OrderV3), typeof(OrderV2), typeof(object), (_, e) => e)
+        };
+
+        var act = () => new EventUpgraderRegistry(entries);
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*ToVersion must be strictly greater than FromVersion*");
+    }
+
+    [Fact]
+    public void Constructor_Throws_WhenUpgradersFormCycle_V1toV2toV1()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 1, 2, typeof(OrderV1), typeof(OrderV2), typeof(object), (_, e) => e),
+            MakeEntry("OrderCreated", 2, 1, typeof(OrderV2), typeof(OrderV1), typeof(object), (_, e) => e)
+        };
+
+        var act = () => new EventUpgraderRegistry(entries);
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*ToVersion must be strictly greater than FromVersion*");
+    }
+
+    [Fact]
+    public void Constructor_Throws_WhenUpgradersFormCycle_V1toV2toV3toV1()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 1, 2, typeof(OrderV1), typeof(OrderV2), typeof(object), (_, e) => e),
+            MakeEntry("OrderCreated", 2, 3, typeof(OrderV2), typeof(OrderV3), typeof(object), (_, e) => e),
+            MakeEntry("OrderCreated", 3, 1, typeof(OrderV3), typeof(OrderV1), typeof(object), (_, e) => e)
+        };
+
+        var act = () => new EventUpgraderRegistry(entries);
+        act.Should().Throw<InvalidOperationException>()
+           .WithMessage("*ToVersion must be strictly greater than FromVersion*");
+    }
+
+    [Fact]
+    public void Upgrade_Throws_WhenMessageVersionIsNewerThanHighest()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 1, 2, typeof(OrderV1), typeof(OrderV2), typeof(object), (_, e) => e),
+            MakeEntry("OrderCreated", 2, 3, typeof(OrderV2), typeof(OrderV3), typeof(object), (_, e) => e)
+        };
+        var registry = new EventUpgraderRegistry(entries);
+        var services = new ServiceCollection().BuildServiceProvider();
+
+        var act = () => registry.Upgrade("OrderCreated", new OrderV3(Guid.NewGuid(), "a@b.com", "123"), 5, services);
+
+        act.Should().Throw<EventVersionNewerThanRegisteredException>()
+           .WithMessage("*version 5*highest registered version is 3*");
+    }
+
+    [Fact]
+    public void Upgrade_Throws_EventVersionNewerThanRegistered_PreservesMetadata()
+    {
+        var entries = new[]
+        {
+            MakeEntry("OrderCreated", 1, 2, typeof(OrderV1), typeof(OrderV2), typeof(object), (_, e) => e)
+        };
+        var registry = new EventUpgraderRegistry(entries);
+        var services = new ServiceCollection().BuildServiceProvider();
+
+        try
+        {
+            registry.Upgrade("OrderCreated", new OrderV2(Guid.NewGuid(), "a@b.com"), 4, services);
+        }
+        catch (EventVersionNewerThanRegisteredException ex)
+        {
+            ex.EventName.Should().Be("OrderCreated");
+            ex.ReceivedVersion.Should().Be(4);
+            ex.HighestRegisteredVersion.Should().Be(2);
+        }
     }
 
     [EventVersion("OrderCreated", 4)]
