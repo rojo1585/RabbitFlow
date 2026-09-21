@@ -437,6 +437,39 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     }
 
     /// <summary>
+    /// Converts <see cref="IReadOnlyBasicProperties"/> (received from the broker on consume)
+    /// to a <see cref="BasicProperties"/> struct (required for re-publishing via
+    /// <c>BasicPublishAsync</c>). In RabbitMQ.Client 7.x, consumed messages arrive with
+    /// <c>ReadOnlyBasicProperties</c> (a class), while <c>BasicPublishAsync</c> requires
+    /// <c>BasicProperties</c> (a struct). A direct cast throws <c>InvalidCastException</c>,
+    /// so we manually copy the fields.
+    /// </summary>
+    private static BasicProperties ToBasicProperties(IReadOnlyBasicProperties source)
+    {
+        var props = new BasicProperties
+        {
+            ContentType = source.ContentType,
+            ContentEncoding = source.ContentEncoding,
+            DeliveryMode = source.DeliveryMode,
+            Priority = source.Priority,
+            CorrelationId = source.CorrelationId,
+            ReplyTo = source.ReplyTo,
+            Expiration = source.Expiration,
+            MessageId = source.MessageId,
+            Timestamp = source.Timestamp,
+            Type = source.Type,
+            UserId = source.UserId,
+            AppId = source.AppId,
+            ReplyToAddress = source.ReplyToAddress,
+        };
+
+        if (source.Headers is not null)
+            props.Headers = new Dictionary<string, object?>(source.Headers);
+
+        return props;
+    }
+
+    /// <summary>
     /// Publishes a message to the retry queue that corresponds to the given delay.
     /// Uses the default AMQP exchange (empty string) with the retry queue name as
     /// routing key. The retry queue has a TTL and x-dead-letter-exchange pointing
@@ -456,7 +489,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: (BasicProperties)properties,
+                basicProperties: ToBasicProperties(properties),
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[Consumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);

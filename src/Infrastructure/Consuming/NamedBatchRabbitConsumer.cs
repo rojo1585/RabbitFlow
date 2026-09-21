@@ -44,7 +44,9 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// Caches compiled batch handler invokers per handler type.
     /// Avoids reflection on every batch dispatch.
     /// </summary>
-    private static readonly ConcurrentDictionary<Type, Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>BatchHandlerInvokers = new();
+    private static readonly ConcurrentDictionary<Type, Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>
+        BatchHandlerInvokers = new();
+
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
     private readonly ManagedConnection _connection;
@@ -58,14 +60,15 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
 
-    public NamedBatchRabbitConsumer(string consumerKey,
-                                    RabbitConsumerOptions options,
-                                    ManagedConnection connection,
-                                    HandlerTypeRegistry registry,
-                                    IMessageSerializer serializer,
-                                    IServiceScopeFactory scopeFactory,
-                                    ILogger<NamedBatchRabbitConsumer> logger,
-                                    RabbitMqMetrics metrics)
+    public NamedBatchRabbitConsumer(
+        string consumerKey,
+        RabbitConsumerOptions options,
+        ManagedConnection connection,
+        HandlerTypeRegistry registry,
+        IMessageSerializer serializer,
+        IServiceScopeFactory scopeFactory,
+        ILogger<NamedBatchRabbitConsumer> logger,
+        RabbitMqMetrics metrics)
     {
         if (!options.EnableBatchConsumer)
             throw new ArgumentException($"Consumer '{consumerKey}' is not configured for batch mode. Set EnableBatchConsumer=true in the consumer options.", nameof(options));
@@ -372,6 +375,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                     await AckMultipleAsync(channel, deliveryTags).ConfigureAwait(false);
                 else
                     await NackMultipleAsync(channel, deliveryTags, requeue: true).ConfigureAwait(false);
+                
             }
             else
             {
@@ -383,6 +387,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
 
                 await NackMultipleAsync(channel, deliveryTags, requeue: false).ConfigureAwait(false);
 
+    
                 foreach (var msg in batch)
                 {
                     await InvokeDeadLetterHandlerAsync(msg, ex, deliveryCount).ConfigureAwait(false);
@@ -424,12 +429,13 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// Processes a single message: header validation, handler resolution, deserialization,
     /// and write to the dispatch channel.
     /// </summary>
-    private async Task ProcessMessageAsync(BasicDeliverEventArgs ea,
-                                           ChannelWriter<BufferedMessage> writer,
-                                           ReadOnlyMemory<byte> body,
-                                           IReadOnlyBasicProperties properties,
-                                           ulong deliveryTag,
-                                           int retryCount)
+    private async Task ProcessMessageAsync(
+        BasicDeliverEventArgs ea,
+        ChannelWriter<BufferedMessage> writer,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        ulong deliveryTag,
+        int retryCount)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType);
         if (eventTypeName is null)
@@ -491,11 +497,12 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// If the retry-publish fails (broker/channel unavailable), fall back to NACK with
     /// requeue=true to preserve at-least-once semantics without losing the message.
     /// </remarks>
-    private async Task HandlePoisonMessageAsync(BasicDeliverEventArgs ea,
-                                                ReadOnlyMemory<byte> body,
-                                                IReadOnlyBasicProperties properties,
-                                                Exception ex,
-                                                int deliveryCount)
+    private async Task HandlePoisonMessageAsync(
+        BasicDeliverEventArgs ea,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        Exception ex,
+        int deliveryCount)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType) ?? "<unknown>";
 
@@ -505,7 +512,9 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
             new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
             new(RabbitMqMetrics.TagQueue, _options.QueueName));
 
-        _logger.LogError(ex, "[BatchConsumer:{Key}] Poison message (pre-handler failure) attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, deliveryCount, _retryPolicy?.MaxRetries ?? 1, ea.DeliveryTag);
+        _logger.LogError(ex,
+            "[BatchConsumer:{Key}] Poison message (pre-handler failure) attempt {Attempt}/{Max} (deliveryTag={Tag})",
+            _consumerKey, deliveryCount, _retryPolicy?.MaxRetries ?? 1, ea.DeliveryTag);
 
         if (ShouldRetry(deliveryCount))
         {
@@ -519,10 +528,15 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
             var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay).ConfigureAwait(false);
 
             if (publishSucceeded)
+            {
                 await AckAsync(ea.DeliveryTag).ConfigureAwait(false);
-
+            }
             else
+            {
+                // Retry publish failed. Fall back to NACK with requeue=true so the broker
+                // redelivers the original message, preserving at-least-once semantics.
                 await NackAsync(ea.DeliveryTag, requeue: true).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -535,8 +549,14 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
             _logger.LogWarning("[BatchConsumer:{Key}] Poison message retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})",
                 _consumerKey, deliveryCount, ea.DeliveryTag);
 
+            // NACK with requeue=false triggers broker-side dead-lettering via the main
+            // queue's x-dead-letter-exchange (a "direct" DLX bound to the DLQ with the
+            // "dead" routing key). The message lands in the DLQ exactly once.
             await NackAsync(ea.DeliveryTag, requeue: false).ConfigureAwait(false);
 
+            // Invoke the (optional) IDeadLetterHandler for application-level notification.
+            // Uses the overload that takes individual components (not a BufferedMessage)
+            // because the message could not be deserialized into a BufferedMessage.
             await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
         }
     }
@@ -565,19 +585,65 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         var eParam = Expression.Parameter(typeof(IReadOnlyList<object>), "events");
         var cParam = Expression.Parameter(typeof(IReadOnlyList<MessageContext>), "contexts");
 
-        var castMethod = typeof(Enumerable).GetMethod("Cast", [typeof(IEnumerable)])!
+        // Find Enumerable.Cast<TResult>(IEnumerable) and Enumerable.ToList<TResult>(IEnumerable<TResult>)
+        // via GetMethods() + LINQ. GetMethod("Cast", [typeof(IEnumerable)]) cannot reliably match
+        // generic method definitions when the parameter types involve constructed generic types
+        // (e.g. IEnumerable<TEvent>), returning null and causing ArgumentNullException in
+        // Expression.Call. Using GetMethods().First(...) with a predicate on name + generic-ness
+        // + parameter count avoids this issue.
+        var castMethod = typeof(Enumerable).GetMethods()
+            .First(m => m.Name == "Cast" && m.IsGenericMethod && m.GetParameters().Length == 1)
             .MakeGenericMethod(eventType);
-        var toListMethod = typeof(Enumerable).GetMethod("ToList", [typeof(IEnumerable<>).MakeGenericType(eventType)])!;
+
+        var toListMethod = typeof(Enumerable).GetMethods()
+            .First(m => m.Name == "ToList" && m.IsGenericMethod && m.GetParameters().Length == 1)
+            .MakeGenericMethod(eventType);
 
         var castEvents = Expression.Call(Expression.Call(null, castMethod, eParam), toListMethod);
 
         var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, castEvents, cParam);
 
-        return Expression.Lambda<Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>(call, hParam, eParam, cParam).Compile();
+        return Expression.Lambda<Func<object, IReadOnlyList<object>, IReadOnlyList<MessageContext>, Task>>(
+            call, hParam, eParam, cParam).Compile();
     }
     private bool ShouldRetry(int deliveryCount)
     {
         return _retryPolicy is not null && _retryPolicy.ShouldRetry(deliveryCount);
+    }
+
+    /// <summary>
+    /// Converts <see cref="IReadOnlyBasicProperties"/> (received from the broker on consume)
+    /// to a <see cref="BasicProperties"/> struct (required for re-publishing via
+    /// <c>BasicPublishAsync</c>). In RabbitMQ.Client 7.x, consumed messages arrive with
+    /// <c>ReadOnlyBasicProperties</c> (a class), while <c>BasicPublishAsync</c> requires
+    /// <c>BasicProperties</c> (a struct). A direct cast throws <c>InvalidCastException</c>,
+    /// so we manually copy the fields.
+    /// </summary>
+    private static BasicProperties ToBasicProperties(IReadOnlyBasicProperties source)
+    {
+        var props = new BasicProperties
+        {
+            ContentType = source.ContentType,
+            ContentEncoding = source.ContentEncoding,
+            DeliveryMode = source.DeliveryMode,
+            Priority = source.Priority,
+            CorrelationId = source.CorrelationId,
+            ReplyTo = source.ReplyTo,
+            Expiration = source.Expiration,
+            MessageId = source.MessageId,
+            Timestamp = source.Timestamp,
+            Type = source.Type,
+            UserId = source.UserId,
+            AppId = source.AppId,
+            ReplyToAddress = source.ReplyToAddress,
+        };
+
+        if (source.Headers is not null)
+        {
+            props.Headers = new Dictionary<string, object?>(source.Headers);
+        }
+
+        return props;
     }
 
     /// <summary>
@@ -600,7 +666,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: (BasicProperties)properties,
+                basicProperties: ToBasicProperties(properties),
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
@@ -661,11 +727,12 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// Used by the poison-message path where the message could not be deserialized into
     /// a BufferedMessage (so we don't have one to pass).
     /// </summary>
-    private async Task InvokeDeadLetterHandlerAsync(BasicDeliverEventArgs ea,
-                                                    ReadOnlyMemory<byte> body,
-                                                    IReadOnlyBasicProperties properties,
-                                                    Exception handlerException,
-                                                    int deliveryCount)
+    private async Task InvokeDeadLetterHandlerAsync(
+        BasicDeliverEventArgs ea,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        Exception handlerException,
+        int deliveryCount)
     {
         try
         {
@@ -836,11 +903,18 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         return Activity.Current?.Context ?? default;
     }
 
-    private Activity? StartConsumeActivity(string eventTypeName, BasicDeliverEventArgs ea, ActivityContext parentContext, string operation)
+    private Activity? StartConsumeActivity(
+        string eventTypeName,
+        BasicDeliverEventArgs ea,
+        ActivityContext parentContext,
+        string operation)
     {
         var links = parentContext != default ? new[] { new ActivityLink(parentContext) } : null;
 
-        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}", ActivityKind.Consumer, parentContext: default, links: links);
+        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}",
+            ActivityKind.Consumer,
+            parentContext: default,
+            links: links);
 
         if (activity is null) return null;
 
@@ -910,9 +984,13 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     private readonly struct ValueStopwatch
     {
         private readonly long _startTimestamp;
+
         private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
+
         public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
-        public double GetElapsedMilliseconds() => Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+
+        public double GetElapsedMilliseconds() =>
+           Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
     }
 
     private static async Task SafeCloseChannelAsync(IChannel channel)
