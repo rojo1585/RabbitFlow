@@ -1,0 +1,798 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using RabbitFlow.Abstractions;
+using RabbitFlow.Configuration;
+using RabbitFlow.Diagnostics;
+using RabbitFlow.Infrastructure.Connection;
+using RabbitFlow.Infrastructure.Topology;
+using RabbitFlow.Infrastructure.Versioning;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Linq.Expressions;
+using System.Text;
+
+namespace RabbitFlow.Infrastructure.Consuming;
+
+/// <summary>
+/// Consumes messages from a single RabbitMQ queue and dispatches them to
+/// registered <see cref="IRabbitHandler{T}"/> implementations.
+///
+/// <para>
+/// Channel strategy: A single long-lived channel per consumer. If the channel or
+/// connection drops, the consumer reconnects automatically in a loop.
+/// </para>
+///
+/// <para>
+/// Concurrency: Controlled by <see cref="RabbitConsumerOptions.PrefetchCount"/> (AMQP level)
+/// and optionally <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> (handler level
+/// via <see cref="SemaphoreSlim"/>).
+/// </para>
+/// </summary>
+internal sealed class NamedRabbitConsumer : IAsyncDisposable
+{
+    private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>> HandlerInvokers = new();
+
+    private readonly string _consumerKey;
+    private readonly RabbitConsumerOptions _options;
+    private readonly ManagedConnection _connection;
+    private readonly HandlerTypeRegistry _registry;
+    private readonly EventUpgraderRegistry? _upgraderRegistry;
+    private readonly IMessageSerializer _serializer;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<NamedRabbitConsumer> _logger;
+    private readonly RabbitMqMetrics _metrics;
+    private readonly SemaphoreSlim? _concurrencyLimiter;
+    private readonly RetryPolicy? _retryPolicy;
+    private volatile IChannel? _currentChannel;
+    private volatile bool _disposed;
+
+    public NamedRabbitConsumer(string consumerKey,
+                               RabbitConsumerOptions options,
+                               ManagedConnection connection,
+                               HandlerTypeRegistry registry,
+                               IMessageSerializer serializer,
+                               IServiceScopeFactory scopeFactory,
+                               ILogger<NamedRabbitConsumer> logger,
+                               RabbitMqMetrics metrics,
+                               EventUpgraderRegistry? upgraderRegistry = null)
+    {
+        _consumerKey = consumerKey;
+        _options = options;
+        _connection = connection;
+        _registry = registry;
+        _upgraderRegistry = upgraderRegistry;
+        _serializer = serializer;
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+        _metrics = metrics;
+
+        if (options.MaxConcurrentHandlers > 0)
+            _concurrencyLimiter = new SemaphoreSlim(options.MaxConcurrentHandlers);
+
+        if (options.EnableRetry)
+            _retryPolicy = new RetryPolicy(options);
+    }
+
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("[Consumer:{Key}] Starting consumer loop → queue '{Queue}'", _consumerKey, _options.QueueName);
+
+        while (!cancellationToken.IsCancellationRequested && !_disposed)
+        {
+            IChannel? channel = null;
+            try
+            {
+                channel = await _connection.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                _currentChannel = channel;
+
+                await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
+
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                consumer.ReceivedAsync += OnMessageReceived;
+
+                var consumerTag = await channel.BasicConsumeAsync(
+                    queue: _options.QueueName,
+                    autoAck: false,
+                    consumer: consumer,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount);
+
+                var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                Task OnShutdown(object sender, ShutdownEventArgs e)
+                {
+                    consumer.ReceivedAsync -= OnMessageReceived;
+                    shutdownTcs.TrySetResult(true);
+                    return Task.CompletedTask;
+                }
+
+                channel.ChannelShutdownAsync += OnShutdown;
+
+                try
+                {
+                    using var reg = cancellationToken.Register(() => shutdownTcs.TrySetCanceled());
+                    await shutdownTcs.Task.ConfigureAwait(false);
+                }
+                finally
+                {
+                    channel.ChannelShutdownAsync -= OnShutdown;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("[Consumer:{Key}] Consumer loop stopped", _consumerKey);
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
+
+                try
+                {
+                    await Task.Delay(2000, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+            finally
+            {
+                _currentChannel = null;
+                if (channel is not null)
+                    await SafeCloseChannelAsync(channel).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task OnMessageReceived(object sender, BasicDeliverEventArgs ea)
+    {
+        var body = ea.Body;
+        var properties = ea.BasicProperties;
+        var deliveryTag = ea.DeliveryTag;
+
+        var retryCount = ExtractRetryCount(properties);
+        var deliveryCount = retryCount + 1;
+
+        try
+        {
+            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await HandlePoisonMessageAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Processes a single message: header validation, handler resolution, deserialization,
+    /// (optional) event upgrade, and handler dispatch with retry/DLQ.
+    /// </summary>
+    /// <remarks>
+    /// Any exception thrown by this method is caught by <see cref="OnMessageReceived"/>'s
+    /// top-level try/catch and treated as a poison message (routed to retry/DLQ). This
+    /// prevents an infinite requeue loop when the message body is corrupt, the schema is
+    /// incompatible, or an event upgrader throws.
+    /// </remarks>
+    private async Task ProcessMessageAsync(
+        BasicDeliverEventArgs ea,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        ulong deliveryTag,
+        int retryCount,
+        int deliveryCount)
+    {
+        var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType);
+        if (eventTypeName is null)
+        {
+            _logger.LogWarning("[Consumer:{Key}] Missing '{Header}' header — Nack (deliveryTag={Tag})", _consumerKey, MessageHeaders.EventType, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            return;
+        }
+
+        var resolved = _registry.Resolve(_consumerKey, eventTypeName);
+        if (resolved is null)
+        {
+            _logger.LogWarning("[Consumer:{Key}] No handler for '{EventType}' — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            return;
+        }
+
+        var (handlerType, eventType, isBatch) = resolved.Value;
+
+        if (isBatch)
+        {
+            _logger.LogWarning("[Consumer:{Key}] Handler for '{EventType}' is IBatchRabbitHandler<>, use batch consumer mode — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            return;
+        }
+
+        var eventVersion = GetEventVersion(properties);
+        object? @event;
+
+        if (_upgraderRegistry is not null)
+        {
+            var highestVersion = _upgraderRegistry.GetHighestVersion(eventTypeName);
+            var deserializationType = _upgraderRegistry.GetTypeForVersion(eventTypeName, eventVersion);
+
+            if (deserializationType is not null && eventVersion < highestVersion)
+            {
+                var oldEvent = _serializer.Deserialize(body, deserializationType);
+                if (oldEvent is null)
+                {
+                    _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' v{Version} (deliveryTag={Tag})", _consumerKey, eventTypeName, eventVersion, deliveryTag);
+                    await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+                    return;
+                }
+
+                using var upgradeScope = _scopeFactory.CreateScope();
+                @event = _upgraderRegistry.Upgrade(eventTypeName, oldEvent, eventVersion, upgradeScope.ServiceProvider);
+
+                _logger.LogDebug("[Consumer:{Key}] Upgraded '{EventType}' v{Version} → v{HighestVersion}", _consumerKey, eventTypeName, eventVersion, highestVersion);
+            }
+            else
+                @event = _serializer.Deserialize(body, eventType);
+
+        }
+        else
+        {
+            @event = _serializer.Deserialize(body, eventType);
+        }
+
+        if (@event is null)
+        {
+            _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            return;
+        }
+
+        var context = BuildMessageContext(ea, retryCount);
+
+        var parentContext = ExtractParentContext(properties);
+
+        using var receiveActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationReceive);
+
+        if (_concurrencyLimiter is not null)
+        {
+            await _concurrencyLimiter.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext).ConfigureAwait(false);
+            }
+            finally
+            {
+                _concurrencyLimiter.Release();
+            }
+        }
+        else
+        {
+            await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Handles a poison message — one that threw an exception during pre-handler processing
+    /// (deserialization, event upgrade, etc.) before the handler was invoked. Routes the
+    /// message through the same retry/DLQ flow as a handler failure so it eventually lands
+    /// in the DLQ instead of looping forever via broker requeue.
+    /// </summary>
+    /// <remarks>
+    /// This mirrors the catch block in <see cref="InvokeHandlerWithRetryAsync"/>:
+    /// <list type="bullet">
+    ///   <item>If <see cref="ShouldRetry"/> is true: publish to the retry queue and ACK the
+    ///   original delivery (so the broker stops redelivering it). The retry queue's TTL
+    ///   re-delivers it to the main queue after the delay.</item>
+    ///   <item>If retries are exhausted: NACK with requeue=false so the broker dead-letters
+    ///   the message to the DLQ via x-dead-letter-exchange, then invoke the (optional)
+    ///   IDeadLetterHandler for application-level notification.</item>
+    /// </list>
+    /// If the retry-publish fails (broker/channel unavailable), fall back to NACK with
+    /// requeue=true to preserve at-least-once semantics without losing the message.
+    /// </remarks>
+    private async Task HandlePoisonMessageAsync(
+        BasicDeliverEventArgs ea,
+        ReadOnlyMemory<byte> body,
+        IReadOnlyBasicProperties properties,
+        Exception ex,
+        int deliveryCount)
+    {
+        var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType) ?? "<unknown>";
+
+        _metrics.ConsumeErrors.Add(1,
+            new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+            new(RabbitMqMetrics.TagEventType, eventTypeName),
+            new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
+            new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+        _logger.LogError(ex, "[Consumer:{Key}] Poison message (pre-handler failure) attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, deliveryCount, _retryPolicy?.MaxRetries ?? 1, ea.DeliveryTag);
+
+        if (ShouldRetry(deliveryCount))
+        {
+            _metrics.Retried.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                new(RabbitMqMetrics.TagAttempt, deliveryCount));
+
+            var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
+            var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay).ConfigureAwait(false);
+
+            if (publishSucceeded)
+                await AckAsync(ea.DeliveryTag).ConfigureAwait(false);
+            else
+                await NackAsync(ea.DeliveryTag, requeue: true).ConfigureAwait(false);
+        }
+        else
+        {
+            _metrics.DeadLettered.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
+
+            _logger.LogWarning("[Consumer:{Key}] Poison message retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, ea.DeliveryTag);
+
+            await NackAsync(ea.DeliveryTag, requeue: false).ConfigureAwait(false);
+
+            await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+        }
+    }
+
+    private async Task InvokeHandlerWithRetryAsync(Type handlerType,
+                                                   object @event,
+                                                   MessageContext context,
+                                                   ulong deliveryTag,
+                                                   int deliveryCount,
+                                                   BasicDeliverEventArgs ea,
+                                                   ReadOnlyMemory<byte> body,
+                                                   IReadOnlyBasicProperties properties,
+                                                   string eventTypeName,
+                                                   ActivityContext parentContext)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var handler = scope.ServiceProvider.GetService(handlerType);
+
+        if (handler is null)
+        {
+            _logger.LogError("[Consumer:{Key}] Handler '{HandlerType}' not in DI — Nack (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
+            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            return;
+        }
+
+        using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
+
+        processActivity?.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
+
+        var handlerSw = ValueStopwatch.StartNew();
+        try
+        {
+            var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
+            await invoker(handler, @event, context).ConfigureAwait(false);
+            await AckAsync(deliveryTag).ConfigureAwait(false);
+
+            _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            _metrics.Consumed.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+        }
+        catch (Exception ex)
+        {
+            _metrics.ConsumeErrors.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+
+            _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
+
+            if (ShouldRetry(deliveryCount))
+            {
+                _metrics.Retried.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagAttempt, deliveryCount));
+
+                _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+
+                var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
+                var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay).ConfigureAwait(false);
+
+                if (publishSucceeded)
+                    await AckAsync(deliveryTag).ConfigureAwait(false);
+                else
+                    await NackAsync(deliveryTag, requeue: true).ConfigureAwait(false);
+            }
+            else
+            {
+                _metrics.DeadLettered.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                    new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
+
+                _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+
+                await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+
+                await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private bool ShouldRetry(int deliveryCount)
+    {
+        return _retryPolicy is not null && _retryPolicy.ShouldRetry(deliveryCount);
+    }
+
+    /// <summary>
+    /// Converts <see cref="IReadOnlyBasicProperties"/> (received from the broker on consume)
+    /// to a <see cref="BasicProperties"/> struct (required for re-publishing via
+    /// <c>BasicPublishAsync</c>). In RabbitMQ.Client 7.x, consumed messages arrive with
+    /// <c>ReadOnlyBasicProperties</c> (a class), while <c>BasicPublishAsync</c> requires
+    /// <c>BasicProperties</c> (a struct). A direct cast throws <c>InvalidCastException</c>,
+    /// so we manually copy the fields.
+    /// </summary>
+    private static BasicProperties ToBasicProperties(IReadOnlyBasicProperties source)
+    {
+        var props = new BasicProperties
+        {
+            ContentType = source.ContentType,
+            ContentEncoding = source.ContentEncoding,
+            DeliveryMode = source.DeliveryMode,
+            Priority = source.Priority,
+            CorrelationId = source.CorrelationId,
+            ReplyTo = source.ReplyTo,
+            Expiration = source.Expiration,
+            MessageId = source.MessageId,
+            Timestamp = source.Timestamp,
+            Type = source.Type,
+            UserId = source.UserId,
+            AppId = source.AppId,
+            ReplyToAddress = source.ReplyToAddress,
+        };
+
+        if (source.Headers is not null)
+            props.Headers = new Dictionary<string, object?>(source.Headers);
+
+        return props;
+    }
+
+    /// <summary>
+    /// Publishes a message to the retry queue that corresponds to the given delay.
+    /// Uses the default AMQP exchange (empty string) with the retry queue name as
+    /// routing key. The retry queue has a TTL and x-dead-letter-exchange pointing
+    /// back to the main exchange, so the message is re-delivered to the main queue
+    /// after the TTL expires.
+    /// </summary>
+    /// <returns><c>true</c> if the publish succeeded; <c>false</c> if the broker or channel was unavailable.</returns>
+    private async Task<bool> PublishToRetryQueueAsync(ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, TimeSpan delay)
+    {
+        var retryQueueName = $"{_options.QueueName}.retry.{(int)delay.TotalSeconds}s";
+
+        IChannel? retryChannel = null;
+        try
+        {
+            retryChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
+            await retryChannel.BasicPublishAsync(
+                exchange: string.Empty,
+                routingKey: retryQueueName,
+                mandatory: false,
+                basicProperties: ToBasicProperties(properties),
+                body: body).ConfigureAwait(false);
+
+            _logger.LogInformation("[Consumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Consumer:{Key}] Failed to publish to retry queue '{RetryQueue}'", _consumerKey, retryQueueName);
+            return false;
+        }
+        finally
+        {
+            if (retryChannel is not null)
+                await SafeCloseChannelAsync(retryChannel).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Invokes the (optional) <see cref="IDeadLetterHandler"/> registered for this consumer.
+    /// This is purely an application-level notification — the message has already been
+    /// dead-lettered to the DLQ by the broker via the main queue's x-dead-letter-exchange.
+    /// This method does NOT re-publish the message.
+    /// </summary>
+    private async Task InvokeDeadLetterHandlerAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception handlerException, int deliveryCount)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var dlHandlers = scope.ServiceProvider.GetServices<IDeadLetterHandler>();
+            var dlHandler = dlHandlers.FirstOrDefault(h => h.ConsumerKey == _consumerKey);
+
+            if (dlHandler is not null)
+            {
+                var deadLetterMsg = new DeadLetterMessage
+                {
+                    OriginalRoutingKey = ea.RoutingKey,
+                    OriginalExchange = ea.Exchange,
+                    OriginalBody = body,
+                    ExceptionType = handlerException.GetType().FullName,
+                    ExceptionMessage = handlerException.Message,
+                    RetryCount = deliveryCount,
+                    DeadLetteredAt = DateTime.UtcNow,
+                    ConsumerKey = _consumerKey,
+                    CorrelationId = GetHeaderString(properties, MessageHeaders.CorrelationId),
+                    MessageId = GetHeaderString(properties, MessageHeaders.MessageId),
+                };
+
+                await dlHandler.HandleAsync(deadLetterMsg).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Consumer:{Key}] IDeadLetterHandler threw (deliveryTag={Tag})", _consumerKey, ea.DeliveryTag);
+        }
+    }
+
+    private int ExtractRetryCount(IReadOnlyBasicProperties properties)
+    {
+        if (properties.Headers is null || !properties.Headers.TryGetValue("x-death", out var value))
+            return 0;
+
+        try
+        {
+            var deathEntries = value switch
+            {
+                System.Collections.IList list => list,
+                _ => null
+            };
+
+            if (deathEntries is null) return 0;
+
+            var totalDeaths = 0;
+            foreach (var entry in deathEntries)
+            {
+                if (entry is not System.Collections.IDictionary dict) continue;
+
+                if (dict["queue"] is string deadQueue &&
+                    (deadQueue == _options.QueueName || deadQueue.StartsWith($"{_options.QueueName}.retry.")))
+                {
+                    if (dict["count"] is long count)
+                        totalDeaths += (int)count;
+                }
+            }
+
+            return totalDeaths;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Consumer:{Key}] Failed to parse x-death header, assuming first delivery", _consumerKey);
+            return 0;
+        }
+    }
+
+    private static Func<object, object, MessageContext, Task> CompileInvoker(Type handlerType)
+    {
+        var handlerInterface = handlerType.GetInterfaces()
+            .First(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRabbitHandler<>));
+
+        var eventType = handlerInterface.GetGenericArguments()[0];
+        var handleMethod = typeof(IRabbitHandler<>).MakeGenericType(eventType)
+            .GetMethod(nameof(IRabbitHandler<IIntegrationEvent>.HandleAsync))!;
+
+        var hParam = Expression.Parameter(typeof(object), "h");
+        var eParam = Expression.Parameter(typeof(object), "e");
+        var cParam = Expression.Parameter(typeof(MessageContext), "c");
+
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam);
+
+        return Expression.Lambda<Func<object, object, MessageContext, Task>>(call, hParam, eParam, cParam).Compile();
+    }
+
+    private async Task AckAsync(ulong deliveryTag)
+    {
+        var channel = _currentChannel;
+        if (channel is null) return;
+
+        try
+        {
+            await channel.BasicAckAsync(deliveryTag: deliveryTag, multiple: false).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Consumer:{Key}] Ack failed (deliveryTag={Tag}, channel likely closed)", _consumerKey, deliveryTag);
+        }
+    }
+
+    private async Task NackAsync(ulong deliveryTag, bool requeue)
+    {
+        var channel = _currentChannel;
+        if (channel is null) return;
+
+        try
+        {
+            await channel.BasicNackAsync(deliveryTag: deliveryTag, multiple: false, requeue: requeue).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Consumer:{Key}] Nack failed (deliveryTag={Tag}, channel likely closed)", _consumerKey, deliveryTag);
+        }
+    }
+
+    private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
+    {
+        await channel.BasicQosAsync(
+            prefetchSize: 0,
+            prefetchCount: _options.PrefetchCount,
+            global: false,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        await TopologyDeclarator.DeclareConsumerTopologyAsync(channel, _options, _logger, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static MessageContext BuildMessageContext(BasicDeliverEventArgs ea, int retryCount)
+    {
+        return new MessageContext
+        {
+            CorrelationId = GetHeaderString(ea.BasicProperties, MessageHeaders.CorrelationId),
+            MessageId = GetHeaderString(ea.BasicProperties, MessageHeaders.MessageId),
+            PublishedAt = ParseHeaderDateTime(ea.BasicProperties, MessageHeaders.PublishedAt),
+            PublisherName = GetHeaderString(ea.BasicProperties, MessageHeaders.PublisherName),
+            RoutingKey = ea.RoutingKey,
+            Exchange = ea.Exchange,
+            DeliveryTag = ea.DeliveryTag,
+            Redelivered = ea.Redelivered,
+            ConsumerTag = ea.ConsumerTag,
+            RetryCount = retryCount,
+            Headers = ExtractCustomHeaders(ea.BasicProperties.Headers),
+        };
+    }
+
+    private static string? GetHeaderString(IReadOnlyBasicProperties properties, string key)
+    {
+        if (properties.Headers is null || !properties.Headers.TryGetValue(key, out var value))
+            return null;
+
+        return value switch
+        {
+            string s => s,
+            byte[] bytes => System.Text.Encoding.UTF8.GetString(bytes),
+            ReadOnlyMemory<byte> rom => System.Text.Encoding.UTF8.GetString(rom.Span),
+            _ => value?.ToString(),
+        };
+    }
+
+    private static DateTime? ParseHeaderDateTime(IReadOnlyBasicProperties properties, string key)
+    {
+        var str = GetHeaderString(properties, key);
+        return str is not null && DateTime.TryParse(str, out var dt) ? dt : null;
+    }
+
+    private static Dictionary<string, string> ExtractCustomHeaders(IDictionary<string, object?>? headers)
+    {
+        var result = new Dictionary<string, string>();
+        if (headers is null) return result;
+
+        foreach (var (key, value) in headers)
+        {
+            if (key.StartsWith("x-")) continue;
+
+            var strValue = value switch
+            {
+                string s => s,
+                byte[] bytes => Encoding.UTF8.GetString(bytes),
+                ReadOnlyMemory<byte> rom => Encoding.UTF8.GetString(rom.Span),
+                _ => value?.ToString(),
+            };
+
+            if (strValue is not null)
+                result[key] = strValue;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// High-performance stopwatch that avoids <see cref="System.Diagnostics.Stopwatch"/>
+    /// allocation. Returns elapsed milliseconds as double.
+    /// </summary>
+    private readonly struct ValueStopwatch
+    {
+        private readonly long _startTimestamp;
+
+        private ValueStopwatch(long startTimestamp) => _startTimestamp = startTimestamp;
+
+        public static ValueStopwatch StartNew() => new(Stopwatch.GetTimestamp());
+
+        public double GetElapsedMilliseconds() =>
+            Stopwatch.GetElapsedTime(_startTimestamp).TotalMilliseconds;
+    }
+
+    /// <summary>
+    /// Extracts the event version from the x-event-version header.
+    /// Returns 1 if the header is missing or unparseable.
+    /// </summary>
+    private static int GetEventVersion(IReadOnlyBasicProperties properties)
+    {
+        var str = GetHeaderString(properties, MessageHeaders.EventVersion);
+        if (str is null || !int.TryParse(str, out var version))
+            return 1;
+        return version;
+    }
+
+    /// <summary>
+    /// Extracts the W3C traceparent from AMQP headers and returns
+    /// the <see cref="ActivityContext"/> to use as parent for consumer activities.
+    /// </summary>
+    private static ActivityContext ExtractParentContext(IReadOnlyBasicProperties properties)
+    {
+        var traceParent = GetHeaderString(properties, RabbitMqActivitySource.TraceParentHeader);
+
+        if (traceParent is not null && ActivityContext.TryParse(traceParent, null, out var context))
+            return context;
+
+        return Activity.Current?.Context ?? default;
+    }
+
+    /// <summary>
+    /// Starts a consumer <see cref="Activity"/> linked to the publisher's trace context.
+    /// Sets standard OTel messaging tags.
+    /// </summary>
+    private Activity? StartConsumeActivity(string eventTypeName, BasicDeliverEventArgs ea, ActivityContext parentContext, string operation)
+    {
+        var links = parentContext != default ? new[] { new ActivityLink(parentContext) } : null;
+
+        var activity = RabbitMqActivitySource.Source.StartActivity($"{eventTypeName} {operation}", ActivityKind.Consumer, parentContext: default, links: links);
+
+        if (activity is null) return null;
+
+        activity.SetTag(RabbitMqActivitySource.TagMessagingSystem, RabbitMqActivitySource.SystemRabbitMq);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationKind, RabbitMqActivitySource.DestinationKindQueue);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingDestinationName, _options.QueueName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingOperation, operation);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingRabbitmqRoutingKey, ea.RoutingKey);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingEventName, eventTypeName);
+        activity.SetTag(RabbitMqActivitySource.TagMessagingConsumerKey, _consumerKey);
+
+        var messageId = GetHeaderString(ea.BasicProperties, MessageHeaders.MessageId);
+        if (messageId is not null)
+            activity.SetTag(RabbitMqActivitySource.TagMessagingMessageId, messageId);
+
+        var correlationId = GetHeaderString(ea.BasicProperties, MessageHeaders.CorrelationId);
+        if (correlationId is not null)
+            activity.SetTag(RabbitMqActivitySource.TagMessagingConversationId, correlationId);
+
+        return activity;
+    }
+
+    private static async Task SafeCloseChannelAsync(IChannel channel)
+    {
+        try
+        {
+            await channel.CloseAsync().ConfigureAwait(false);
+        }
+        catch (AlreadyClosedException) { }
+        catch (ObjectDisposedException) { }
+        catch { }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (_disposed) return default;
+        _disposed = true;
+        _concurrencyLimiter?.Dispose();
+        return default;
+    }
+}

@@ -3,5 +3,6 @@
 ################################################################################
 
 /.vs
-/tests/RabbitFlow.Tests/bin/Debug/net8.0
-/tests/RabbitFlow.Tests/obj
+/bin/Debug/net10.0
+/obj
+/bin/Debug
