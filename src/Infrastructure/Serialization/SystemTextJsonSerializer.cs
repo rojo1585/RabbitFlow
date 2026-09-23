@@ -33,15 +33,23 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
     /// <inheritdoc/>
     public ReadOnlyMemory<byte> Serialize<T>(T message)
     {
+        return Serialize(message, typeof(T).FullName!, 1);
+    }
+
+    /// <summary>
+    /// Serializes a message with explicit event type metadata, ensuring the envelope body
+    /// is consistent with the AMQP headers (both use the same EventType / EventVersion).
+    /// </summary>
+    public ReadOnlyMemory<byte> Serialize<T>(T message, string eventTypeName, int eventVersion)
+    {
         var envelope = new MessageEnvelope
         {
-            EventType = typeof(T).FullName!,
-            EventVersion = 1,
+            EventType = eventTypeName,
+            EventVersion = eventVersion,
             Payload = message,
         };
 
-        var json = JsonSerializer.Serialize(envelope, _options);
-        return System.Text.Encoding.UTF8.GetBytes(json);
+        return JsonSerializer.SerializeToUtf8Bytes(envelope, _options);
     }
 
     /// <inheritdoc/>
@@ -117,6 +125,6 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         {
             return null;
         }
-    
+
     }
 }

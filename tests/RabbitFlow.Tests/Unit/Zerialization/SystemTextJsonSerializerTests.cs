@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 
 namespace RabbitFlow.Tests.Unit.Zerialization;
 
-
 public class SystemTextJsonSerializerTests
 {
     private readonly SystemTextJsonSerializer _serializer = new();
@@ -68,6 +67,17 @@ public class SystemTextJsonSerializerTests
         var envelope = _serializer.DeserializeEnvelope(bytes);
 
         envelope!.EventVersion.Should().Be(1);
+    }
+
+    [Fact]
+    public void Serialize_WithEventTypeAndVersion_WritesMetadataToEnvelope()
+    {
+        var bytes = _serializer.Serialize(new TestEvent("x", 1), "custom-event-name", 42);
+        var envelope = _serializer.DeserializeEnvelope(bytes);
+
+        envelope.Should().NotBeNull();
+        envelope!.EventType.Should().Be("custom-event-name");
+        envelope.EventVersion.Should().Be(42);
     }
 
     [Fact]

@@ -46,7 +46,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
         {
             _producers[config.ServiceKey] = CreatePublisher(config, connectionRegistry, serializer, loggerFactory, metrics);
 
-            _logger.LogDebug("Registered producer '{Key}' → exchange '{Exchange}' on connection '{Connection}' (pool={PoolSize})",config.ServiceKey, config.ExchangeName, config.ConnectionName,config.ChannelPoolSize > 0 ? config.ChannelPoolSize.ToString() : "off");
+            _logger.LogDebug("Registered producer '{Key}' → exchange '{Exchange}' on connection '{Connection}' (pool={PoolSize})", config.ServiceKey, config.ExchangeName, config.ConnectionName, config.ChannelPoolSize > 0 ? config.ChannelPoolSize.ToString() : "off");
         }
 
         if (_producers.Count == 1)
@@ -115,10 +115,24 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     }
 
     /// <inheritdoc/>
+    public Task PublishAsync<TEvent>(TEvent @event, string? correlationId, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    {
+        var producer = ResolveDefaultProducer();
+        return producer.PublishAsync(@event, correlationId, routingKey, cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
         var producer = ResolveProducer(producerKey);
         return producer.PublishAsync(@event, routingKey, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? correlationId, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
+    {
+        var producer = ResolveProducer(producerKey);
+        return producer.PublishAsync(@event, correlationId, routingKey, cancellationToken);
     }
 
     /// <inheritdoc/>
