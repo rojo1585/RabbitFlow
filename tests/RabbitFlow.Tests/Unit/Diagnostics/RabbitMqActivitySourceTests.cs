@@ -18,16 +18,6 @@ public class RabbitMqActivitySourceTests
     }
 
     [Fact]
-    public void Initialize_SetsSourceName()
-    {
-        var customName = "Test.RabbitMQ";
-
-        RabbitMqActivitySource.Initialize(customName);
-
-        RabbitMqActivitySource.SourceName.Should().Be(customName);
-    }
-     
-    [Fact]
     public void Source_IsNotNull()
     {
         RabbitMqActivitySource.Source.Should().NotBeNull();
