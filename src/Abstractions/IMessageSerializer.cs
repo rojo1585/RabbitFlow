@@ -20,6 +20,29 @@ namespace RabbitFlow.Abstractions
         ReadOnlyMemory<byte> Serialize<T>(T message);
 
         /// <summary>
+        /// Serializes a message to bytes for publishing, with explicit event type metadata.
+        /// </summary>
+        /// <typeparam name="T">The message type.</typeparam>
+        /// <param name="message">The message instance to serialize.</param>
+        /// <param name="eventTypeName">
+        /// The logical event type name (from <c>[EventVersion]</c> attribute or <c>Type.FullName</c>).
+        /// Written to the envelope's <c>EventType</c> field for cross-platform interoperability.
+        /// </param>
+        /// <param name="eventVersion">
+        /// The event schema version (from <c>[EventVersion]</c> attribute, default 1).
+        /// Written to the envelope's <c>EventVersion</c> field.
+        /// </param>
+        /// <returns>The serialized bytes.</returns>
+        /// <remarks>
+        /// Default implementation delegates to <see cref="Serialize{T}(T)"/> for backward
+        /// compatibility with custom serializers that don't override this overload. The default
+        /// <see cref="Infrastructure.Serialization.SystemTextJsonSerializer"/> overrides this to
+        /// write the metadata into the envelope body, ensuring the body and AMQP headers are
+        /// consistent.
+        /// </remarks>
+        ReadOnlyMemory<byte> Serialize<T>(T message, string eventTypeName, int eventVersion) => Serialize(message);
+
+        /// <summary>
         /// Deserializes bytes back to a typed message.
         /// </summary>
         /// <typeparam name="T">The expected message type.</typeparam>

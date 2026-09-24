@@ -12,9 +12,17 @@ namespace RabbitFlow.Exceptions
                    $"with routing key '{routingKey}'" +
                    (eventType != null ? $" and event type '{eventType.FullName}'" : "") + ".")
     {
-
+        /// <summary>
+        /// The consumer key that was used to attempt to resolve a handler.
+        /// </summary>
         public string ConsumerKey { get; } = consumerKey;
+        /// <summary>
+        /// The routing key that was used to attempt to resolve a handler.
+        /// </summary>
         public string RoutingKey { get; } = routingKey;
+        /// <summary>
+        /// The event type that was used to attempt to resolve a handler, if any.
+        /// </summary>
         public Type? EventType { get; } = eventType;
     }
 }

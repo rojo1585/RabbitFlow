@@ -33,6 +33,8 @@ namespace RabbitFlow.Abstractions
         /// <param name="context">
         /// Message metadata including correlation ID, retry count, and custom headers.
         /// </param>
-        Task HandleAsync(TEvent @event, MessageContext context);
+        /// <param name="cancellationToken">
+        /// </param>
+        Task HandleAsync(TEvent @event, MessageContext context, CancellationToken cancellationToken);
     }
 }

@@ -51,7 +51,11 @@ public sealed class EventUpgraderRegistry
     /// Used by the consumer to resolve the handler.
     /// </summary>
     private readonly Dictionary<string, Type> _latestTypes;
-
+    /// <summary>
+    /// Upgrader registry constructor. Validates that all registered upgraders form a continuous chain
+    /// </summary>
+    /// <param name="entries"></param>
+    /// <exception cref="InvalidOperationException"></exception>
     public EventUpgraderRegistry(IEnumerable<UpgraderEntry> entries)
     {
         var chains = new Dictionary<string, List<UpgraderEntry>>();
@@ -61,20 +65,13 @@ public sealed class EventUpgraderRegistry
 
         foreach (var entry in entries)
         {
-            // An upgrader MUST increase the version (ToVersion > FromVersion).
-            // This prevents:
-            //   - Self-loops (V1 → V1)
-            //   - Downgrades (V3 → V2)
-            //   - Cycles (V1 → V2 → V1, or V1 → V2 → V3 → V1)
-            // In any cycle, at least one upgrader must decrease the version to return
-            // to the starting point, so this single check eliminates all possible cycles.
             if (entry.ToVersion <= entry.FromVersion)
             {
                 throw new InvalidOperationException(
-                    $"Event '{entry.EventName}' upgrader v{entry.FromVersion}→v{entry.ToVersion} is invalid: " +
-                    $"ToVersion must be strictly greater than FromVersion. " +
-                    $"Downgrades, self-loops, and cycles are not allowed because they cause silent data corruption " +
-                    $"(Upgrade would return a lower version than the handler expects).");
+                    @$"Event '{entry.EventName}' upgrader v{entry.FromVersion}→v{entry.ToVersion} is invalid: 
+                    ToVersion must be strictly greater than FromVersion. 
+                    Downgrades, self-loops, and cycles are not allowed because they cause silent data corruption 
+                    (Upgrade would return a lower version than the handler expects).");
             }
 
             // Track all version types
@@ -107,8 +104,6 @@ public sealed class EventUpgraderRegistry
         foreach (var (eventName, chain) in chains)
         {
             var sorted = chain.OrderBy(e => e.FromVersion).ToArray();
-
-            // Validate chain continuity: each entry's ToVersion should match the next entry's FromVersion
             for (int i = 0; i < sorted.Length - 1; i++)
             {
                 if (sorted[i].ToVersion != sorted[i + 1].FromVersion)

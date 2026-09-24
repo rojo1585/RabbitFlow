@@ -56,5 +56,7 @@ public interface IBatchRabbitHandler<TEvent> where TEvent : class
     /// Context for each event, in the same order as <paramref name="events"/>.
     /// Each entry contains correlation ID, retry count, headers, etc.
     /// </param>
-    Task HandleBatchAsync(IReadOnlyList<TEvent> events, IReadOnlyList<MessageContext> contexts);
+    /// <param name="cancellationToken">
+    /// </param>
+    Task HandleBatchAsync(IReadOnlyList<TEvent> events, IReadOnlyList<MessageContext> contexts, CancellationToken cancellationToken);
 }

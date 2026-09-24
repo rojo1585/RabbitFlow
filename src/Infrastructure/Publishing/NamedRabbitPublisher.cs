@@ -89,6 +89,16 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     private readonly ILogger<NamedRabbitPublisher> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly RabbitMqMetrics _metrics;
+
+    /// <summary>
+    /// Tracks whether topology has been declared at least once. Used only for logging
+    /// (to avoid repeating the "Declared exchange" log on every publish). The actual
+    /// topology declaration runs on every channel rental because ExchangeDeclareAsync
+    /// is idempotent (create-if-not-exists) and cheap (one AMQP round-trip, cached by
+    /// the broker). This guarantees topology exists on every new connection, even after
+    /// broker restarts that lose metadata — without needing to subscribe to connection
+    /// shutdown events or reset a sticky flag.
+    /// </summary>
     private volatile bool _topologyDeclared;
 
     /// <summary>
@@ -123,12 +133,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         if (_poolingEnabled)
         {
             var channelOptions = options.EnablePublisherConfirms ? ConfirmChannelOptions : null;
-            _channelPool = new ChannelPool(
-                connection,
-                channelOptions,
-                options.ChannelPoolSize,
-                logger,
-                onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
+            _channelPool = new ChannelPool(connection, channelOptions, options.ChannelPoolSize, logger, onChannelCreated: ()
+                => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
 
             _logger.LogInformation("[Producer:{Key}] Channel pooling ENABLED (size={PoolSize}, confirms={Confirms})", producerKey, options.ChannelPoolSize, options.EnablePublisherConfirms);
         }
@@ -150,12 +156,20 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     public async Task PublishAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
+        await PublishAsync(@event, correlationId: null, routingKeyOverride, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Publishes a single event with an explicit correlation ID.
+    /// </summary>
+    public async Task PublishAsync<TEvent>(TEvent @event, string? correlationId, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    {
         if (_poolingEnabled)
-            await PublishWithPoolAsync(@event, routingKeyOverride, cancellationToken).ConfigureAwait(false);
-
+            await PublishWithPoolAsync(@event, correlationId, routingKeyOverride, cancellationToken)
+                .ConfigureAwait(false);
         else
-            await PublishWithoutPoolAsync(@event, routingKeyOverride, cancellationToken).ConfigureAwait(false);
-
+            await PublishWithoutPoolAsync(@event, correlationId, routingKeyOverride, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -181,15 +195,17 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// Publishes using a channel from the pool.
     /// Faulted channels (after confirm timeout) are discarded.
     /// </summary>
-    private async Task PublishWithPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    private async Task PublishWithPoolAsync<TEvent>(TEvent @event, string? correlationId, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         RecordPoolRented();
-        var channel = await _channelPool!.RentAsync(cancellationToken).ConfigureAwait(false);
+        var channel = await _channelPool!.RentAsync(cancellationToken)
+            .ConfigureAwait(false);
         bool channelFaulted = false;
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
+            await InitializeChannelAsync(channel, cancellationToken)
+                .ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -198,13 +214,14 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
             SetPublishActivityTags(activity, routingKey, eventTypeName);
 
-            var (body, properties) = BuildMessage(@event, routingKey);
+            var (body, properties) = BuildMessage(@event, routingKey, correlationId);
             InjectTraceContext(activity, properties);
 
             var sw = ValueStopwatch.StartNew();
             try
             {
-                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (PublisherConfirmTimeoutException)
             {
@@ -254,12 +271,14 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         if (eventList.Count == 0) return;
 
         RecordPoolRented();
-        var channel = await _channelPool!.RentAsync(cancellationToken).ConfigureAwait(false);
+        var channel = await _channelPool!.RentAsync(cancellationToken)
+            .ConfigureAwait(false);
         bool channelFaulted = false;
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
+            await InitializeChannelAsync(channel, cancellationToken)
+                .ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -339,13 +358,14 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// <summary>
     /// Publishes using a new channel per call (backward compatible).
     /// </summary>
-    private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
+    private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? correlationId, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
+            await InitializeChannelAsync(channel, cancellationToken)
+                .ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -354,7 +374,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
             SetPublishActivityTags(activity, routingKey, eventTypeName);
 
-            var (body, properties) = BuildMessage(@event, routingKey);
+            var (body, properties) = BuildMessage(@event, routingKey, correlationId);
             InjectTraceContext(activity, properties);
 
             var sw = ValueStopwatch.StartNew();
@@ -393,7 +413,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
+            await InitializeChannelAsync(channel, cancellationToken)
+                .ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -446,7 +467,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         }
         finally
         {
-            await SafeCloseChannelAsync(channel).ConfigureAwait(false);
+            await SafeCloseChannelAsync(channel)
+                .ConfigureAwait(false);
         }
     }
 
@@ -464,12 +486,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </list>
     /// </para>
     /// </summary>
-    private async Task ExecutePublishAsync(
-        IChannel channel,
-        string routingKey,
-        BasicProperties properties,
-        ReadOnlyMemory<byte> body,
-        CancellationToken cancellationToken)
+    private async Task ExecutePublishAsync(IChannel channel,
+                                           string routingKey,
+                                           BasicProperties properties,
+                                           ReadOnlyMemory<byte> body,
+                                           CancellationToken cancellationToken)
     {
         if (!_options.EnablePublisherConfirms)
         {
@@ -486,8 +507,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         var confirmTimeout = TimeSpan.FromMilliseconds(_options.PublishConfirmTimeoutMs);
 
         using var timeoutCts = new CancellationTokenSource(confirmTimeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            timeoutCts.Token, cancellationToken);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
 
         try
         {
@@ -585,15 +605,20 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     }
 
     /// <summary>
-    /// Declares topology (first call only).
+    /// Declares topology on the channel. Runs on EVERY channel rental (not just the first)
+    /// because <c>ExchangeDeclareAsync</c> is idempotent (create-if-not-exists) and cheap.
+    /// This guarantees topology exists on every new connection, even after broker restarts
+    /// that lose metadata — without needing to subscribe to connection shutdown events or
+    /// reset a sticky flag.
     /// </summary>
     private async Task InitializeChannelAsync(IChannel channel, CancellationToken cancellationToken)
     {
-        if (!_topologyDeclared && _options.AutoDeclareTopology)
+        if (_options.AutoDeclareTopology)
         {
             await TopologyDeclarator.DeclareProducerTopologyAsync(channel, _options, _logger, cancellationToken).ConfigureAwait(false);
 
-            _topologyDeclared = true;
+            if (!_topologyDeclared)
+                _topologyDeclared = true;
         }
     }
 
@@ -602,11 +627,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// Combines both into a single method to ensure the timestamp is consistent
     /// between the AMQP timestamp field and the x-published-at header.
     /// </summary>
-    private (ReadOnlyMemory<byte> Body, BasicProperties Properties) BuildMessage<TEvent>(TEvent @event, string routingKey) where TEvent : class
+    private (ReadOnlyMemory<byte> Body, BasicProperties Properties) BuildMessage<TEvent>(TEvent @event, string routingKey, string? correlationId = null) where TEvent : class
     {
 
         var now = _timeProvider.GetUtcNow();
-        var correlationId = Guid.NewGuid().ToString();
+        var effectiveCorrelationId = correlationId ?? Guid.NewGuid().ToString();
         var messageId = Guid.NewGuid().ToString();
 
         var (eventTypeName, eventVersion) = ResolveEventTypeInfo<TEvent>();
@@ -617,10 +642,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
             ContentEncoding = "utf-8",
             DeliveryMode = DeliveryModes.Persistent,
             MessageId = messageId,
+            CorrelationId = effectiveCorrelationId,
             Timestamp = new AmqpTimestamp(now.ToUnixTimeMilliseconds()),
             Headers = new Dictionary<string, object?>
             {
-                [MessageHeaders.CorrelationId] = correlationId,
+                [MessageHeaders.CorrelationId] = effectiveCorrelationId,
                 [MessageHeaders.MessageId] = messageId,
                 [MessageHeaders.PublishedAt] = now.ToString("O"),
                 [MessageHeaders.PublisherName] = _producerKey,
@@ -628,8 +654,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 [MessageHeaders.EventVersion] = eventVersion.ToString(),
             },
         };
-
-        var body = _serializer.Serialize(@event);
+        var body = _serializer.Serialize(@event, eventTypeName, eventVersion);
         return (body, properties);
     }
 

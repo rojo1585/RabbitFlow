@@ -10,14 +10,13 @@ namespace RabbitFlow.Diagnostics;
 /// Central <see cref="Meter"/> for all RabbitMQ metrics.
 /// 
 /// <para>
-/// Uses the built-in <c>System.Diagnostics.Metrics</c> API (.NET 8+).
+/// Uses the built-in <c>System.Diagnostics.Metrics</c> API
 /// Metrics are automatically collected by any OpenTelemetry SDK configured with
 /// <c>AddMeter(MeterName)</c>.
 /// </para>
 /// 
 /// <para>
-/// The <see cref="MeterName"/> is determined at construction time via the
-/// <see cref="RabbitMqBuilder.WithInstrumentationName"/> builder method or
+/// The <see cref="MeterName"/> is determined at construction time
 /// <see cref="Configuration.RabbitMqSettings.InstrumentationName"/> setting.
 /// </para>
 /// 

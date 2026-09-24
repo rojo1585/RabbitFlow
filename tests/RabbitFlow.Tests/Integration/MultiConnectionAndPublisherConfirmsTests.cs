@@ -22,7 +22,7 @@ public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
         public string ConsumerKey => "system-consumer";
         public static readonly List<SystemEvent> Received = [];
 
-        public Task HandleAsync(SystemEvent @event, MessageContext context)
+        public Task HandleAsync(SystemEvent @event, MessageContext context, CancellationToken   cancellationToken)
         {
             Received.Add(@event);
             return Task.CompletedTask;
@@ -34,7 +34,7 @@ public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
         public string ConsumerKey => "business-consumer";
         public static readonly List<BusinessEvent> Received = [];
 
-        public Task HandleAsync(BusinessEvent @event, MessageContext context)
+        public Task HandleAsync(BusinessEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
             Received.Add(@event);
             return Task.CompletedTask;

@@ -33,7 +33,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// </summary>
 internal sealed class NamedRabbitConsumer : IAsyncDisposable
 {
-    private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, Task>> HandlerInvokers = new();
+    private static readonly ConcurrentDictionary<Type, Func<object, object, MessageContext, CancellationToken, Task>> HandlerInvokers = new();
 
     private readonly string _consumerKey;
     private readonly RabbitConsumerOptions _options;
@@ -48,6 +48,13 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private readonly RetryPolicy? _retryPolicy;
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
+
+    /// <summary>
+    /// Cancellation token source that is cancelled when the consumer's RunAsync loop exits
+    /// (shutdown or connection loss). Passed to handlers via the CancellationToken parameter
+    /// so they can observe shutdown and abort long-running work gracefully.
+    /// </summary>
+    private readonly CancellationTokenSource _shutdownCts = new();
 
     public NamedRabbitConsumer(string consumerKey,
                                RabbitConsumerOptions options,
@@ -160,7 +167,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
         try
         {
-            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount).ConfigureAwait(false);
+            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -178,13 +185,13 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// prevents an infinite requeue loop when the message body is corrupt, the schema is
     /// incompatible, or an event upgrader throws.
     /// </remarks>
-    private async Task ProcessMessageAsync(
-        BasicDeliverEventArgs ea,
-        ReadOnlyMemory<byte> body,
-        IReadOnlyBasicProperties properties,
-        ulong deliveryTag,
-        int retryCount,
-        int deliveryCount)
+    private async Task ProcessMessageAsync(BasicDeliverEventArgs ea,
+                                           ReadOnlyMemory<byte> body,
+                                           IReadOnlyBasicProperties properties,
+                                           ulong deliveryTag,
+                                           int retryCount,
+                                           int deliveryCount,
+                                           CancellationToken cancellationToken)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType);
         if (eventTypeName is null)
@@ -258,10 +265,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
         if (_concurrencyLimiter is not null)
         {
-            await _concurrencyLimiter.WaitAsync().ConfigureAwait(false);
+            await _concurrencyLimiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext).ConfigureAwait(false);
+                await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -270,7 +277,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         else
         {
-            await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext).ConfigureAwait(false);
+            await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -337,7 +344,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             _logger.LogWarning("[Consumer:{Key}] Poison message retries exhausted ({Attempts}) — dead-lettering (deliveryTag={Tag})", _consumerKey, deliveryCount, ea.DeliveryTag);
 
             await NackAsync(ea.DeliveryTag, requeue: false).ConfigureAwait(false);
-
             await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
         }
     }
@@ -351,7 +357,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                                                    ReadOnlyMemory<byte> body,
                                                    IReadOnlyBasicProperties properties,
                                                    string eventTypeName,
-                                                   ActivityContext parentContext)
+                                                   ActivityContext parentContext,
+                                                   CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var handler = scope.ServiceProvider.GetService(handlerType);
@@ -371,7 +378,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         try
         {
             var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
-            await invoker(handler, @event, context).ConfigureAwait(false);
+            await invoker(handler, @event, context, cancellationToken).ConfigureAwait(false);
             await AckAsync(deliveryTag).ConfigureAwait(false);
 
             _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
@@ -468,7 +475,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
         return props;
     }
-
     /// <summary>
     /// Publishes a message to the retry queue that corresponds to the given delay.
     /// Uses the default AMQP exchange (empty string) with the retry queue name as
@@ -583,7 +589,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private static Func<object, object, MessageContext, Task> CompileInvoker(Type handlerType)
+    private static Func<object, object, MessageContext, CancellationToken, Task> CompileInvoker(Type handlerType)
     {
         var handlerInterface = handlerType.GetInterfaces()
             .First(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRabbitHandler<>));
@@ -595,10 +601,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var hParam = Expression.Parameter(typeof(object), "h");
         var eParam = Expression.Parameter(typeof(object), "e");
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
+        var tParam = Expression.Parameter(typeof(CancellationToken), "t");
 
-        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam, tParam);
 
-        return Expression.Lambda<Func<object, object, MessageContext, Task>>(call, hParam, eParam, cParam).Compile();
+        return Expression.Lambda<Func<object, object, MessageContext, CancellationToken, Task>>(call, hParam, eParam, cParam, tParam).Compile();
     }
 
     private async Task AckAsync(ulong deliveryTag)

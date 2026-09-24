@@ -20,10 +20,10 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
         public static int ProcessedCount;
         public static readonly List<Guid> ProcessedIds = [];
 
-        public async Task HandleAsync(ShutdownEvent @event, MessageContext context)
+        public async Task HandleAsync(ShutdownEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
             // Simulate work
-            await Task.Delay(500);
+            await Task.Delay(500, cancellationToken);
             Interlocked.Increment(ref ProcessedCount);
             ProcessedIds.Add(@event.Id);
         }

@@ -28,7 +28,11 @@ public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _conne
 {
     private readonly ILogger<RabbitConsumerHostedService> _logger = _loggerFactory.CreateLogger<RabbitConsumerHostedService>();
     private readonly List<RabbitConsumerOptions> _consumerConfigs = _settings.Value.Consumers;
-
+    /// <summary>
+    /// Executes the hosted service, starting all configured consumers and awaiting their completion.
+    /// </summary>
+    /// <param name="stoppingToken"></param>
+    /// <returns></returns>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (_consumerConfigs.Count == 0)

@@ -1,12 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Exceptions;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RabbitFlow.Infrastructure.Connection;
+
 /// <summary>
 /// A pool of reusable AMQP channels that eliminates the per-publish channel
 /// creation overhead — the #1 throughput bottleneck in channel-per-publish strategies.
@@ -81,8 +78,15 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Used for diagnostics and logging only — not for control flow.
     /// </summary>
     private int _currentCount;
+    
+    //   _disposed: 0 = live, 1 = disposed
+    private int _disposed;
 
-    private volatile bool _disposed;
+    /// <summary>
+    /// Returns true if this pool has been disposed.
+    /// Thread-safe: reads the _disposed int with Volatile.Read.
+    /// </summary>
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
     /// The maximum number of channels this pool will manage concurrently.
@@ -121,7 +125,6 @@ internal sealed class ChannelPool : IAsyncDisposable
 
     /// <summary>
     /// Rents a healthy channel from the pool.
-    ///
     /// <para>
     /// If an idle channel is available and open, it's returned immediately.
     /// If idle channels are closed (e.g. after connection loss), they're discarded
@@ -136,8 +139,7 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// <exception cref="ObjectDisposedException">Thrown if the pool has been disposed.</exception>
     public async Task<IChannel> RentAsync(CancellationToken cancellationToken)
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(ChannelPool));
+        ObjectDisposedException.ThrowIf(IsDisposed, nameof(ChannelPool));
 
         await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -155,7 +157,7 @@ internal sealed class ChannelPool : IAsyncDisposable
                 await SafeCloseAsync(channel).ConfigureAwait(false);
             }
 
-            var newChannel = await _connection.CreateChannelAsync(_channelOptions,  cancellationToken: cancellationToken).ConfigureAwait(false);
+            var newChannel = await _connection.CreateChannelAsync(_channelOptions, cancellationToken: cancellationToken).ConfigureAwait(false);
 
             Interlocked.Increment(ref _currentCount);
             _onChannelCreated?.Invoke();
@@ -166,7 +168,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         }
         catch
         {
-            if (!_disposed)
+            if (!IsDisposed)
             {
                 try { _semaphore.Release(); }
                 catch (ObjectDisposedException) { }
@@ -187,7 +189,7 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// <param name="channel">The channel to return.</param>
     public void Return(IChannel channel)
     {
-        if (_disposed || !channel.IsOpen)
+        if (IsDisposed || !channel.IsOpen)
         {
             Interlocked.Decrement(ref _currentCount);
             _ = SafeCloseAsync(channel);
@@ -196,7 +198,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         {
             _available.Enqueue(channel);
 
-            _logger.LogDebug("[ChannelPool] Returned channel #{Number} to pool (available={Available}, total={Total})",channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
+            _logger.LogDebug("[ChannelPool] Returned channel #{Number} to pool (available={Available}, total={Total})", channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
         }
 
         try { _semaphore.Release(); }
@@ -221,7 +223,7 @@ internal sealed class ChannelPool : IAsyncDisposable
 
         _logger.LogDebug("[ChannelPool] Discarded channel #{Number} (available={Available}, total={Total})", channel.ChannelNumber, _available.Count, Volatile.Read(ref _currentCount));
 
-        if (!_disposed)
+        if (!IsDisposed)
         {
             try { _semaphore.Release(); }
             catch (ObjectDisposedException) { }
@@ -243,14 +245,13 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// <summary>
     /// Safely closes a channel, ignoring errors if already closed or disposed.
     /// </summary>
-    private  async Task SafeCloseAsync(IChannel channel)
+    private async Task SafeCloseAsync(IChannel channel)
     {
         try
         {
             if (channel.IsOpen)
-            {
                 await channel.CloseAsync().ConfigureAwait(false);
-            }
+
             channel.Dispose();
         }
         catch (Exception ex)
@@ -263,11 +264,17 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Disposes the pool. Closes all idle channels.
     /// Rented channels are NOT closed — their callers are responsible for returning or discarding them.
     /// </summary>
+    /// <remarks>
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
+    /// executes the dispose body, matching the pattern in <see cref="ManagedConnection.DisposeAsync"/>.
+    /// Without this guard, two concurrent calls would both pass the _disposed check, both set
+    /// _disposed = true, and both execute the body — double-disposing the SemaphoreSlim and
+    /// throwing ObjectDisposedException.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
-
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
 
         _logger.LogInformation("[ChannelPool] Disposing. Waiting for in-flight channels to return...");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -280,7 +287,7 @@ internal sealed class ChannelPool : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                _logger.LogWarning("[ChannelPool] Graceful shutdown timed out ({Acquired}/{Total} channels returned). Forcing closure.",i, MaxSize);
+                _logger.LogWarning("[ChannelPool] Graceful shutdown timed out ({Acquired}/{Total} channels returned). Forcing closure.", i, MaxSize);
                 break;
             }
         }
@@ -296,6 +303,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         _logger.LogInformation("[ChannelPool] Disposed.");
     }
 }
+
 
 
 

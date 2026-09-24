@@ -20,8 +20,10 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     private readonly ILogger<RabbitConnectionRegistry> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly RabbitMqSettings _settings;
-    private bool _started;
-    private bool _disposed;
+    //   _started:  0 = not started, 1 = started
+    //   _disposed: 0 = live, 1 = disposed
+    private int _started;
+    private int _disposed;
 
     /// <summary>
     /// Creates a new registry. The connections are NOT started yet —
@@ -64,10 +66,8 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     /// <inheritdoc/>
     public void StartAll()
     {
-        if (_started)
+        if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
             throw new InvalidOperationException("StartAll has already been called.");
-
-        _started = true;
 
         foreach (var (name, conn) in _connections)
         {
@@ -101,11 +101,14 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     /// <summary>
     /// Disposes all managed connections asynchronously.
     /// </summary>
-    /// <returns></returns>
+    /// <remarks>
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
+    /// executes the dispose body, matching the pattern in <see cref="ManagedConnection.DisposeAsync"/>.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
 
         _logger.LogInformation("Disposing {Count} connection(s)...", _connections.Count);
 

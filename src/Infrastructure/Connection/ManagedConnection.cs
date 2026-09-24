@@ -5,6 +5,7 @@ using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 
 namespace RabbitFlow.Infrastructure.Connection;
+
 /// <summary>
 /// Manages a single named RabbitMQ connection with automatic reconnection
 /// and exponential backoff.
@@ -31,6 +32,12 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// The connection name (typically the dictionary key from configuration).
 /// This overrides <see cref="RabbitConnectionOptions.Name"/>.
 /// </param>
+/// <param name="_options">
+/// The configuration options used to establish and maintain the connection.
+/// </param>
+/// <param name="_logger">
+/// The logger instance used to output connection events and status updates.
+/// </param>
 public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
     private readonly object _lock = new();
@@ -39,7 +46,17 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
     private int _backoffSeconds = 1;
-    private volatile bool _disposed;
+
+    //   _disposed: 0 = live, 1 = disposed
+    //   _started:  0 = not started, 1 = started
+    private int _disposed;
+    private int _started;
+
+    /// <summary>
+    /// Returns true if this instance has been disposed.
+    /// Thread-safe: reads the _disposed int with Volatile.Read.
+    /// </summary>
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
     /// The connection name from <see cref="RabbitConnectionOptions.Name"/>.
@@ -64,9 +81,23 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// The connection is established asynchronously.
     /// </summary>
     /// <exception cref="ObjectDisposedException">Thrown if this instance has been disposed.</exception>
+    /// <exception cref="InvalidOperationException">Thrown if Start has already been called.</exception>
+    /// <remarks>
+    /// This method is idempotent and thread-safe. If called concurrently from two threads,
+    /// only one call proceeds; the other throws <see cref="InvalidOperationException"/>.
+    /// Without this guard, two concurrent calls would each create a CancellationTokenSource
+    /// and a background Task, and the second call's fields would overwrite the first's —
+    /// leaking the first CTS (never disposed) and leaving the first Task running with no
+    /// way to cancel it. Two connection loops would then race to establish the same
+    /// IConnection, causing duplicate TCP connections and confusing logs.
+    /// </remarks>
     public void Start()
     {
-        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
+        ObjectDisposedException.ThrowIf(IsDisposed, nameof(ManagedConnection));
+
+        if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
+            throw new InvalidOperationException($"[{Name}] Start has already been called. ManagedConnection can only be started once.");
+
 
         _loopCts = new CancellationTokenSource();
         _loopTask = Task.Run(() => ConnectionLoopAsync(_loopCts.Token));
@@ -75,12 +106,10 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <summary>
     /// Creates a new AMQP channel on the current connection.
     /// The caller owns the channel and is responsible for disposing it.
-    /// 
     /// <para>
     /// If the connection is not open, this waits up to <paramref name="timeout"/>
     /// for the connection to become available.
     /// </para>
-    /// 
     /// <para>
     /// The <paramref name="channelOptions"/> parameter is passed through to
     /// <c>IConnection.CreateChannelAsync</c>. Use it to enable publisher confirms
@@ -91,13 +120,20 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// Optional channel creation options (e.g. publisher confirms configuration).
     /// When <c>null</c>, the broker defaults are used (no confirms).
     /// </param>
+    /// <param name="timeout">
+    /// Optional maximum time to wait for an open connection before throwing a <see cref="TimeoutException"/>.
+    /// Defaults to 30 seconds when <c>null</c>.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// A token to monitor for cancellation requests.
+    /// </param>
     /// <returns>A new <see cref="IChannel"/> on the current connection.</returns>
     /// <exception cref="TimeoutException">
     /// Thrown if no connection is available within the timeout.
     /// </exception>
     public async Task<IChannel> CreateChannelAsync(CreateChannelOptions? channelOptions = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, nameof(ManagedConnection));
+        ObjectDisposedException.ThrowIf(IsDisposed, nameof(ManagedConnection));
 
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
         using var timeoutCts = new CancellationTokenSource(effectiveTimeout);
@@ -165,9 +201,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             }
 
             if (!cancellationToken.IsCancellationRequested)
-            {
                 await BackoffDelayAsync(cancellationToken).ConfigureAwait(false);
-            }
         }
 
         _logger.LogInformation("[{Name}] Connection loop stopped", Name);
@@ -188,26 +222,6 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
             VirtualHost = _options.VirtualHost,
             RequestedHeartbeat = TimeSpan.FromSeconds(_options.RequestedHeartbeatSeconds),
             ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
-
-            // Disable the driver's built-in auto-recovery. This class owns the reconnection
-            // lifecycle (see ConnectionLoopAsync): when the connection drops, OnConnectionShutdown
-            // signals _connectionClosedTcs, the loop wakes up, applies exponential backoff, and
-            // creates a brand-new IConnection via TryConnectAsync.
-            //
-            // If AutomaticRecoveryEnabled were left at its default (true), the driver would
-            // concurrently try to recover the SAME IConnection (re-establish TCP, re-create
-            // channels, re-declare topology) while this class also creates a new one. The two
-            // recoveries race: the driver's recovered connection is eventually closed when the
-            // new connection wins, channels in the pool point at the dying connection, and
-            // in-flight messages can be lost during the transition. Disabling auto-recovery
-            // ensures exactly one reconnection path — this loop — so there is a single source
-            // of truth for the live IConnection.
-            //
-            // TopologyRecoveryEnabled is also disabled for the same reason: with auto-recovery
-            // off, topology recovery never runs anyway, but setting it explicitly documents the
-            // intent and prevents surprises if auto-recovery is ever re-enabled in the future.
-            // Topology is re-declared idempotently by publishers and consumers on each new
-            // connection (see TopologyDeclarator), so no recovery is needed from the driver.
             AutomaticRecoveryEnabled = false,
             TopologyRecoveryEnabled = false,
         };
@@ -224,10 +238,12 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         var closedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        connection.ConnectionShutdownAsync += OnConnectionShutdown;
+
         bool wasDisposed;
         lock (_lock)
         {
-            wasDisposed = _disposed;
+            wasDisposed = IsDisposed;
             if (!wasDisposed)
             {
                 _connection = connection;
@@ -238,11 +254,12 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         if (wasDisposed)
         {
-            await connection.CloseAsync().ConfigureAwait(false);
+            try { connection.ConnectionShutdownAsync -= OnConnectionShutdown; }
+            catch { }
+            await connection.CloseAsync(cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
-
-        connection.ConnectionShutdownAsync += OnConnectionShutdown;
 
         _logger.LogInformation("[{Name}] Connected to {Host}:{Port}/{VHost} (local port {LocalPort})", Name, _options.HostName, _options.Port, _options.VirtualHost, connection.LocalPort);
     }
@@ -256,13 +273,16 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         if (sender is IConnection conn)
             conn.ConnectionShutdownAsync -= OnConnectionShutdown;
 
+        TaskCompletionSource<bool>? tcsToComplete;
         lock (_lock)
         {
             if (ReferenceEquals(sender, _connection))
                 _connection = null;
 
+            tcsToComplete = _connectionClosedTcs;
         }
-        _connectionClosedTcs?.TrySetResult(true);
+
+        tcsToComplete?.TrySetResult(true);
 
         if (args.Initiator == ShutdownInitiator.Application)
             _logger.LogInformation("[{Name}] Connection closed by application", Name);
@@ -281,7 +301,8 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
 
         _logger.LogInformation("[{Name}] Reconnecting in {Delay}s...", Name, delay.TotalSeconds);
 
-        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        await Task.Delay(delay, cancellationToken)
+            .ConfigureAwait(false);
 
         _backoffSeconds = Math.Min(_backoffSeconds * 2, _options.MaxBackoffSeconds);
     }
@@ -350,10 +371,17 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// Disposes the managed connection. Cancels the reconnection loop
     /// and closes the AMQP connection cleanly.
     /// </summary>
+    /// <remarks>
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
+    /// executes the dispose body, even if called concurrently (e.g. host shutdown + a
+    /// health check that disposes). Without this guard, two concurrent calls would both
+    /// pass the _disposed check, both set _disposed = true, and both execute the body —
+    /// double-disposing _loopCts and throwing ObjectDisposedException.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
 
         _logger.LogInformation("[{Name}] Disposing...", Name);
 
