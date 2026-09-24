@@ -6,7 +6,6 @@ using RabbitMQ.Client.Exceptions;
 
 namespace RabbitFlow.Infrastructure.Connection;
 
-
 /// <summary>
 /// Manages a single named RabbitMQ connection with automatic reconnection
 /// and exponential backoff.
@@ -32,6 +31,12 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// <param name="_name">
 /// The connection name (typically the dictionary key from configuration).
 /// This overrides <see cref="RabbitConnectionOptions.Name"/>.
+/// </param>
+/// <param name="_options">
+/// The configuration options used to establish and maintain the connection.
+/// </param>
+/// <param name="_logger">
+/// The logger instance used to output connection events and status updates.
 /// </param>
 public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
@@ -101,12 +106,10 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <summary>
     /// Creates a new AMQP channel on the current connection.
     /// The caller owns the channel and is responsible for disposing it.
-    /// 
     /// <para>
     /// If the connection is not open, this waits up to <paramref name="timeout"/>
     /// for the connection to become available.
     /// </para>
-    /// 
     /// <para>
     /// The <paramref name="channelOptions"/> parameter is passed through to
     /// <c>IConnection.CreateChannelAsync</c>. Use it to enable publisher confirms
@@ -116,6 +119,13 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// <param name="channelOptions">
     /// Optional channel creation options (e.g. publisher confirms configuration).
     /// When <c>null</c>, the broker defaults are used (no confirms).
+    /// </param>
+    /// <param name="timeout">
+    /// Optional maximum time to wait for an open connection before throwing a <see cref="TimeoutException"/>.
+    /// Defaults to 30 seconds when <c>null</c>.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// A token to monitor for cancellation requests.
     /// </param>
     /// <returns>A new <see cref="IChannel"/> on the current connection.</returns>
     /// <exception cref="TimeoutException">
@@ -362,7 +372,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     /// and closes the AMQP connection cleanly.
     /// </summary>
     /// <remarks>
-    /// Thread-safe: uses <see cref="Interlocked.Exchange"/> to ensure that only one thread
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
     /// executes the dispose body, even if called concurrently (e.g. host shutdown + a
     /// health check that disposes). Without this guard, two concurrent calls would both
     /// pass the _disposed check, both set _disposed = true, and both execute the body —

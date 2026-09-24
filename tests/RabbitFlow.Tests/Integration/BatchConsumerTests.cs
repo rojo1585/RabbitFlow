@@ -27,7 +27,7 @@ public class BatchConsumerTests(RabbitMqFixture fixture)
         public static readonly List<IReadOnlyList<TelemetryEvent>> ReceivedBatches = [];
         public static readonly List<TelemetryEvent> AllReceived = [];
 
-        public Task HandleBatchAsync(IReadOnlyList<TelemetryEvent> events, IReadOnlyList<MessageContext> contexts)
+        public Task HandleBatchAsync(IReadOnlyList<TelemetryEvent> events, IReadOnlyList<MessageContext> contexts, CancellationToken cancellationToken)
         {
             ReceivedBatches.Add(events);
             AllReceived.AddRange(events);

@@ -23,7 +23,6 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// 
 /// <para>
 /// Execution order: This hosted service should start BEFORE consumer hosted services.
-/// The <see cref="ServiceCollectionExtensions"/>
 /// <c>StartAsync</c> dependencies.
 /// </para>
 /// </summary>

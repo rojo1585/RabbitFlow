@@ -265,7 +265,7 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Rented channels are NOT closed — their callers are responsible for returning or discarding them.
     /// </summary>
     /// <remarks>
-    /// Thread-safe: uses <see cref="Interlocked.Exchange"/> to ensure that only one thread
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
     /// executes the dispose body, matching the pattern in <see cref="ManagedConnection.DisposeAsync"/>.
     /// Without this guard, two concurrent calls would both pass the _disposed check, both set
     /// _disposed = true, and both execute the body — double-disposing the SemaphoreSlim and

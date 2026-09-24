@@ -21,7 +21,7 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
         public static readonly List<FlakyEvent> SucceededEvents = [];
         public static bool NextAttemptSucceeds;
 
-        public Task HandleAsync(FlakyEvent @event, MessageContext context)
+        public Task HandleAsync(FlakyEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref AttemptCount);
 

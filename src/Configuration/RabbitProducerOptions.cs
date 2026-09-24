@@ -2,13 +2,13 @@
 
 /// <summary>
 /// Defines a message producer bound to a specific exchange and connection.
-/// The <see cref="ServiceKey"/> is used to route publish calls to the correct producer.
+/// The <see cref="RabbitFlow.Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?,CancellationToken)"/> 
 /// </summary>
 public sealed class RabbitProducerOptions
 {
     /// <summary>
     /// Unique identifier for this producer.
-    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync"/>
+    /// Used in <see cref="RabbitFlow.Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?, CancellationToken)"/>
     /// to target a specific producer when multiple exist.
     /// Must be unique across all producers.
     /// </summary>
@@ -25,7 +25,7 @@ public sealed class RabbitProducerOptions
     /// </summary>
     public required string ExchangeName { get; init; }
 
-    /// <summary>
+    /// <summary>   
     /// Exchange type: direct, topic, fanout, or headers.
     /// Defaults to "direct".
     /// </summary>

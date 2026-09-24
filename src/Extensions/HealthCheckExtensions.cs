@@ -52,7 +52,6 @@ public static class HealthCheckExtensions
         /// <summary>
         /// Adds a health check for a specific named RabbitMQ connection.
         /// </summary>
-        /// <param name="builder">The health checks builder.</param>
         /// <param name="connectionName">
         /// The connection name as defined in <c>RabbitMqSettings.Connections</c>.
         /// </param>
@@ -91,7 +90,6 @@ public static class HealthCheckExtensions
         /// The response data includes per-connection status for dashboard visibility.
         /// </para>
         /// </summary>
-        /// <param name="builder">The health checks builder.</param>
         /// <param name="name">
         /// The health check name. Defaults to <c>"rabbitmq"</c>.
         /// </param>

@@ -22,7 +22,7 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
         public string ConsumerKey => "orders-consumer";
         public static readonly List<OrderCreatedEvent> Received = [];
 
-        public Task HandleAsync(OrderCreatedEvent @event, MessageContext context)
+        public Task HandleAsync(OrderCreatedEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
             Received.Add(@event);
             return Task.CompletedTask;

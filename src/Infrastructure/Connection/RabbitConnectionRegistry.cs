@@ -102,7 +102,7 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
     /// Disposes all managed connections asynchronously.
     /// </summary>
     /// <remarks>
-    /// Thread-safe: uses <see cref="Interlocked.Exchange"/> to ensure that only one thread
+    /// Thread-safe: uses <see cref="Interlocked.Exchange(ref int, int)"/> to ensure that only one thread
     /// executes the dispose body, matching the pattern in <see cref="ManagedConnection.DisposeAsync"/>.
     /// </remarks>
     public async ValueTask DisposeAsync()
