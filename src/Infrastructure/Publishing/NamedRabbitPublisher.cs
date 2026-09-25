@@ -133,8 +133,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         if (_poolingEnabled)
         {
             var channelOptions = options.EnablePublisherConfirms ? ConfirmChannelOptions : null;
-            _channelPool = new ChannelPool(connection, channelOptions, options.ChannelPoolSize, logger, onChannelCreated: ()
-                => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
+            _channelPool = new ChannelPool(connection, channelOptions, options.ChannelPoolSize, logger, 
+                                           onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
 
             _logger.LogInformation("[Producer:{Key}] Channel pooling ENABLED (size={PoolSize}, confirms={Confirms})", producerKey, options.ChannelPoolSize, options.EnablePublisherConfirms);
         }
@@ -186,9 +186,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     public async Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
         if (_poolingEnabled)
-            await PublishBatchWithPoolAsync(events, routingKeyOverride, cancellationToken).ConfigureAwait(false);
+            await PublishBatchWithPoolAsync(events, routingKeyOverride, cancellationToken)
+                .ConfigureAwait(false);
         else
-            await PublishBatchWithoutPoolAsync(events, routingKeyOverride, cancellationToken).ConfigureAwait(false);
+            await PublishBatchWithoutPoolAsync(events, routingKeyOverride, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -301,7 +303,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
                 try
                 {
-                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken)
+                        .ConfigureAwait(false);
                     publishedCount++;
                 }
                 catch (PublisherConfirmTimeoutException)
@@ -360,12 +363,12 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private async Task PublishWithoutPoolAsync<TEvent>(TEvent @event, string? correlationId, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
 
         try
         {
-            await InitializeChannelAsync(channel, cancellationToken)
-                .ConfigureAwait(false);
+            await InitializeChannelAsync(channel, cancellationToken).ConfigureAwait(false);
 
             var routingKey = routingKeyOverride ?? _options.RoutingKey;
             var (eventTypeName, _) = ResolveEventTypeInfo<TEvent>();
@@ -380,7 +383,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
             var sw = ValueStopwatch.StartNew();
             try
             {
-                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
+                await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -397,7 +401,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         }
         finally
         {
-            await SafeCloseChannelAsync(channel).ConfigureAwait(false);
+            await SafeCloseChannelAsync(channel)
+                .ConfigureAwait(false);
         }
     }
 
@@ -406,10 +411,11 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </summary>
     private async Task PublishBatchWithoutPoolAsync<TEvent>(IEnumerable<TEvent> events, string? routingKeyOverride, CancellationToken cancellationToken) where TEvent : class
     {
-        var eventList = events as IList<TEvent> ?? events.ToList();
+        var eventList = events as IList<TEvent> ?? [.. events];
         if (eventList.Count == 0) return;
 
-        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var channel = await _connection.CreateChannelAsync(_options.EnablePublisherConfirms ? ConfirmChannelOptions : null, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
 
         try
         {
@@ -437,7 +443,8 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
                 try
                 {
-                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken).ConfigureAwait(false);
+                    await ExecutePublishAsync(channel, routingKey, properties, body, cancellationToken)
+                        .ConfigureAwait(false);
                     publishedCount++;
                 }
                 catch (Exception ex)
@@ -467,8 +474,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         }
         finally
         {
-            await SafeCloseChannelAsync(channel)
-                .ConfigureAwait(false);
+            await SafeCloseChannelAsync(channel).ConfigureAwait(false);
         }
     }
 
@@ -486,11 +492,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
     /// </list>
     /// </para>
     /// </summary>
-    private async Task ExecutePublishAsync(IChannel channel,
-                                           string routingKey,
-                                           BasicProperties properties,
-                                           ReadOnlyMemory<byte> body,
-                                           CancellationToken cancellationToken)
+    private async Task ExecutePublishAsync(IChannel channel, string routingKey, BasicProperties properties, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
     {
         if (!_options.EnablePublisherConfirms)
         {
@@ -640,7 +642,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         {
             ContentType = "application/json",
             ContentEncoding = "utf-8",
-            DeliveryMode = DeliveryModes.Persistent,
+            DeliveryMode = _options.Persistent ? DeliveryModes.Persistent : DeliveryModes.Transient,
             MessageId = messageId,
             CorrelationId = effectiveCorrelationId,
             Timestamp = new AmqpTimestamp(now.ToUnixTimeMilliseconds()),
@@ -654,6 +656,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
                 [MessageHeaders.EventVersion] = eventVersion.ToString(),
             },
         };
+
         var body = _serializer.Serialize(@event, eventTypeName, eventVersion);
         return (body, properties);
     }
@@ -718,3 +721,4 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
             await _channelPool.DisposeAsync().ConfigureAwait(false);
     }
 }
+

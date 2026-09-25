@@ -1,14 +1,13 @@
 ﻿namespace RabbitFlow.Configuration;
-
 /// <summary>
 /// Defines a message producer bound to a specific exchange and connection.
-/// The <see cref="RabbitFlow.Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?,CancellationToken)"/> 
+/// The <see cref="ServiceKey"/> is used to route publish calls to the correct producer.
 /// </summary>
 public sealed class RabbitProducerOptions
 {
     /// <summary>
     /// Unique identifier for this producer.
-    /// Used in <see cref="RabbitFlow.Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?, CancellationToken)"/>
+    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?, CancellationToken)"/>
     /// to target a specific producer when multiple exist.
     /// Must be unique across all producers.
     /// </summary>
@@ -25,7 +24,7 @@ public sealed class RabbitProducerOptions
     /// </summary>
     public required string ExchangeName { get; init; }
 
-    /// <summary>   
+    /// <summary>
     /// Exchange type: direct, topic, fanout, or headers.
     /// Defaults to "direct".
     /// </summary>
@@ -66,6 +65,31 @@ public sealed class RabbitProducerOptions
     /// Defaults to true.
     /// </summary>
     public bool AutoDeclareTopology { get; init; } = true;
+
+    /// <summary>
+    /// Additional arguments for the exchange (passed to ExchangeDeclareAsync).
+    /// Use the constants in <see cref="RabbitMqArgs"/> to avoid typos.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// ExchangeArguments = new()
+    /// {
+    ///     [RabbitMqArgs.AlternateExchange] = "orders-unroutable"
+    /// }
+    /// </code>
+    /// </example>
+    public Dictionary<string, object?>? ExchangeArguments { get; init; }
+
+    /// <summary>
+    /// Whether messages are persisted to disk (DeliveryModes.Persistent) or kept in memory
+    /// only (DeliveryModes.Transient). Defaults to true (persistent).
+    /// </summary>
+    /// <remarks>
+    /// Set to false for fire-and-forget high-throughput scenarios where durability is not
+    /// required (messages are lost on broker restart). Persistent messages survive broker
+    /// restarts but have slightly higher latency due to disk writes.
+    /// </remarks>
+    public bool Persistent { get; init; } = true;
 
     /// <summary>
     /// Size of the channel pool for this producer.

@@ -78,6 +78,14 @@ public sealed record RabbitConsumerOptions
     /// its retry attempts, it is routed to the DLQ.
     /// Defaults to true.
     /// </summary>
+    /// <remarks>
+    /// When <c>true</c> and <see cref="DeadLetter"/> is <c>null</c>, the framework auto-declares
+    /// a DLX/DLQ with default names ({QueueName}.dlx, {QueueName}.dlq), bound with routing key
+    /// "dead" — backward-compatible behavior. When <c>true</c> and <see cref="DeadLetter"/> is
+    /// set, the framework uses the provided <see cref="DeadLetterOptions"/>. Setting this to
+    /// <c>false</c> while also setting <see cref="DeadLetter"/> is a configuration error
+    /// (validated at startup).
+    /// </remarks>
     public bool EnableDeadLetter { get; init; } = true;
 
     /// <summary>
@@ -88,7 +96,32 @@ public sealed record RabbitConsumerOptions
     /// <summary>
     /// Name of the dead-letter queue. If null, defaults to "{QueueName}.dlq".
     /// </summary>
+    /// <remarks>
+    /// Shortcut for <see cref="DeadLetterOptions.QueueName"/>. If <see cref="DeadLetter"/>
+    /// is set, this property is ignored (use <see cref="DeadLetterOptions.QueueName"/> instead).
+    /// </remarks>
     public string? DeadLetterQueueName { get; init; }
+
+    /// <summary>
+    /// Flexible dead-letter configuration. When set, overrides
+    /// <see cref="DeadLetterExchangeName"/> and <see cref="DeadLetterQueueName"/> with
+    /// full control over exchange type, routing key, queue arguments, and auto-declare behavior.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When <c>null</c> (default), the framework uses backward-compatible defaults
+    /// (see <see cref="EnableDeadLetter"/>).
+    /// </para>
+    /// <para>
+    /// Set to an instance to:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item>Customize DLX/DLQ names, exchange type, or routing key.</item>
+    ///   <item>Pass extra queue arguments (e.g. x-max-length, x-queue-type=quorum).</item>
+    ///   <item>Reference an externally-managed DLX/DLQ (<see cref="DeadLetterOptions.AutoDeclare"/> = false).</item>
+    /// </list>
+    /// </remarks>
+    public DeadLetterOptions? DeadLetter { get; init; }
 
     // ─── Retry Settings ────────────────────────────────────────────────
 
@@ -168,17 +201,68 @@ public sealed record RabbitConsumerOptions
     /// </summary>
     public bool AutoDeclareTopology { get; init; } = true;
 
+    /// <summary>
+    /// Additional arguments for the main queue (passed to QueueDeclareAsync).
+    /// Use the constants in <see cref="RabbitMqArgs"/> to avoid typos.
+    /// </summary>
+    public Dictionary<string, object?>? QueueArguments { get; init; }
+
+    /// <summary>
+    /// Time-to-live for messages in the main queue. Messages older than this are discarded
+    /// (or dead-lettered if <see cref="EnableDeadLetter"/> is true).
+    /// Sets x-message-ttl on the queue declaration.
+    /// </summary>
+    public TimeSpan? MessageTtl { get; init; }
+
+    /// <summary>
+    /// When true, only one consumer in a consumer group consumes at a time. Other consumers
+    /// registered with the same queue will be standby; they take over only if the active
+    /// consumer dies (failover without duplicate consumption). Sets x-single-active-consumer.
+    /// </summary>
+    public bool SingleActiveConsumer { get; init; }
+
+    /// <summary>
+    /// Consumer tag used to identify this consumer in the RabbitMQ Management UI and logs.
+    /// If null, the broker generates one (e.g. amq.ctag-xxxx).
+    /// </summary>
+    public string? ConsumerTag { get; init; }
+
     // ─── Computed Properties ──────────────────────────────────────────
 
     /// <summary>
     /// Resolved dead-letter exchange name (falls back to convention if not explicitly set).
     /// </summary>
-    internal string ResolvedDlxName => DeadLetterExchangeName ?? $"{QueueName}.dlx";
+    internal string ResolvedDlxName => DeadLetter?.ExchangeName ?? DeadLetterExchangeName ?? $"{QueueName}.dlx";
 
     /// <summary>
     /// Resolved dead-letter queue name (falls back to convention if not explicitly set).
     /// </summary>
-    internal string ResolvedDlqName => DeadLetterQueueName ?? $"{QueueName}.dlq";
+    internal string ResolvedDlqName => DeadLetter?.QueueName ?? DeadLetterQueueName ?? $"{QueueName}.dlq";
+
+    /// <summary>
+    /// Resolved dead-letter exchange type (defaults to "direct").
+    /// </summary>
+    internal string ResolvedDlxType => DeadLetter?.ExchangeType ?? "direct";
+
+    /// <summary>
+    /// Resolved routing key for binding the DLQ to the DLX (defaults to "dead").
+    /// </summary>
+    internal string ResolvedDlqRoutingKey => DeadLetter?.RoutingKey ?? "dead";
+
+    /// <summary>
+    /// Whether to auto-declare the DLX/DLQ (defaults to true).
+    /// </summary>
+    internal bool ResolvedDlqAutoDeclare => DeadLetter?.AutoDeclare ?? true;
+
+    /// <summary>
+    /// Resolved DLQ queue arguments (may be null).
+    /// </summary>
+    internal Dictionary<string, object?>? ResolvedDlqQueueArguments => DeadLetter?.QueueArguments;
+
+    /// <summary>
+    /// Resolved DLX exchange arguments (may be null).
+    /// </summary>
+    internal Dictionary<string, object?>? ResolvedDlxExchangeArguments => DeadLetter?.ExchangeArguments;
 
     /// <summary>
     /// Resolved retry delays (falls back to default if not explicitly set).
