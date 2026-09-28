@@ -1,13 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
 using RabbitFlow.Exceptions;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+
 
 namespace RabbitFlow.Configuration;
-
 
 /// <summary>
 /// Validates <see cref="RabbitMqSettings"/> using the idiomatic
@@ -123,9 +118,14 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
             ValidateNonEmptyString(errors, producer.ExchangeType, $"{prefix}: ExchangeType");
             ValidateNonEmptyString(errors, producer.RoutingKey, $"{prefix}: RoutingKey");
 
+            // ChannelPoolSize: 0 disables pooling (channel-per-publish, backward compatible).
+            // Negative values crash ChannelPool's SemaphoreSlim constructor at runtime.
             if (producer.ChannelPoolSize < 0)
                 errors.Add($"{prefix}: ChannelPoolSize must be >= 0 (got {producer.ChannelPoolSize}). Use 0 to disable pooling.");
 
+            // PublishConfirmTimeoutMs: only enforced when EnablePublisherConfirms is true,
+            // but validating the bound unconditionally catches misconfiguration early even
+            // for producers that later flip confirms on without adjusting the timeout.
             if (producer.PublishConfirmTimeoutMs <= 0)
                 errors.Add($"{prefix}: PublishConfirmTimeoutMs must be > 0 (got {producer.PublishConfirmTimeoutMs}).");
 
@@ -156,9 +156,15 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
             ValidateNonEmptyString(errors, consumer.QueueName, $"{prefix}: QueueName");
             ValidateNonEmptyString(errors, consumer.RoutingKey, $"{prefix}: RoutingKey");
 
+            // PrefetchCount: a value of 0 creates a BoundedChannel with capacity 0 in the
+            // batch consumer (PrefetchCount * 2 = 0), causing every WriteAsync to block
+            // indefinitely → consumer deadlock. Also, AMQP prefetch of 0 means "unlimited"
+            // which is rarely desired and can overwhelm the consumer.
             if (consumer.PrefetchCount < 1)
                 errors.Add($"{prefix}: PrefetchCount must be >= 1 (got {consumer.PrefetchCount}). A value of 0 deadlocks the batch consumer (BoundedChannel capacity = PrefetchCount * 2).");
 
+            // MaxConcurrentHandlers: 0 means "unlimited" (default, valid). Negative would
+            // crash SemaphoreSlim constructor.
             if (consumer.MaxConcurrentHandlers < 0)
                 errors.Add($"{prefix}: MaxConcurrentHandlers must be >= 0 (got {consumer.MaxConcurrentHandlers}). Use 0 for unlimited.");
 
@@ -167,6 +173,10 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
 
             if (consumer.EnableBatchConsumer)
             {
+                // BatchSize: a value of 0 means the batch is never flushed by size. Combined
+                // with BatchTimeoutMs > 0 it still works (timeout flush), but it defeats the
+                // purpose of batching and causes List reallocations. 0 with BatchTimeoutMs=0
+                // is a busy-loop.
                 if (consumer.BatchSize < 1)
                     errors.Add($"{prefix}: BatchSize must be >= 1 when EnableBatchConsumer is true (got {consumer.BatchSize}).");
 
@@ -174,6 +184,10 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
                     errors.Add($"{prefix}: BatchTimeoutMs must be > 0 when EnableBatchConsumer is true (got {consumer.BatchTimeoutMs}). A value of 0 causes a busy-loop or prevents the batch from ever flushing by size.");
             }
 
+            // RetryDelays consistency: each retry attempt (2..MaxRetries) needs a delay.
+            // The default [0s, 5s, 30s] has 3 entries which covers MaxRetries=3 (attempts 2,3 → indices 0,1).
+            // We require at least MaxRetries - 1 entries so GetRetryDelay never returns null
+            // for an in-range deliveryCount.
             if (consumer.EnableRetry && consumer.RetryDelays is { } delays)
             {
                 var requiredCount = consumer.MaxRetries - 1;
@@ -186,6 +200,27 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
                         errors.Add($"{prefix}: RetryDelays must not contain negative values (got {d}).");
                 }
             }
+
+            // DeadLetter vs EnableDeadLetter consistency: if DeadLetter is configured but
+            // EnableDeadLetter is explicitly false, that's a contradiction — fail fast.
+            if (consumer.DeadLetter is not null && !consumer.EnableDeadLetter)
+            {
+                errors.Add($"{prefix}: DeadLetter is configured but EnableDeadLetter=false. " +
+                    "These are contradictory — either remove the DeadLetter configuration or set EnableDeadLetter=true.");
+            }
+
+            // DeadLetterOptions field validations
+            if (consumer.DeadLetter is { } dl)
+            {
+                ValidateNonEmptyString(errors, dl.ExchangeName, $"{prefix}: DeadLetter.ExchangeName");
+                ValidateNonEmptyString(errors, dl.ExchangeType, $"{prefix}: DeadLetter.ExchangeType");
+                ValidateNonEmptyString(errors, dl.QueueName, $"{prefix}: DeadLetter.QueueName");
+                ValidateNonEmptyString(errors, dl.RoutingKey, $"{prefix}: DeadLetter.RoutingKey");
+            }
+
+            // MessageTtl must be positive if set
+            if (consumer.MessageTtl is { } ttl && ttl <= TimeSpan.Zero)
+                errors.Add($"{prefix}: MessageTtl must be > 0 (got {ttl}). Use null to disable.");
 
             if (!settings.Connections.ContainsKey(consumer.ConnectionName))
                 errors.Add(RabbitMqConfigurationException.MissingConnection(prefix, consumer.ConnectionName).Message);
