@@ -5,3 +5,4 @@
 /.vs
 /tests/RabbitFlow.Tests/bin/Debug/net8.0
 /tests/RabbitFlow.Tests/obj
+/obj
