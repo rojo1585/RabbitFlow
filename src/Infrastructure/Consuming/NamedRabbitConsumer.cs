@@ -16,7 +16,6 @@ using System.Text;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
-
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them to
 /// registered <see cref="IRabbitHandler{T}"/> implementations.
@@ -51,9 +50,18 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private volatile bool _disposed;
 
     /// <summary>
-    /// Cancellation token source that is cancelled when the consumer's RunAsync loop exits
-    /// (shutdown or connection loss). Passed to handlers via the CancellationToken parameter
-    /// so they can observe shutdown and abort long-running work gracefully.
+    /// Cancellation token source whose <see cref="CancellationTokenSource.Token"/> is passed to
+    /// handlers via the <c>CancellationToken</c> parameter in <see cref="OnMessageReceived"/>.
+    /// It is cancelled (and disposed) only in <see cref="DisposeAsync"/> — AFTER the
+    /// <see cref="RunAsync"/> loop has exited and in-flight handlers have had a chance to
+    /// complete during the graceful shutdown window.
+    /// <para>
+    /// The hosted service's <c>stoppingToken</c> stops <see cref="RunAsync"/> from accepting
+    /// NEW messages (via the existing <c>shutdownTcs</c> mechanism), but in-flight handlers
+    /// continue to observe this token (NOT cancelled) until the consumer is disposed. This
+    /// matches the expected graceful-shutdown behavior: in-flight handlers complete
+    /// naturally; only the dispatch loop is stopped.
+    /// </para>
     /// </summary>
     private readonly CancellationTokenSource _shutdownCts = new();
 
@@ -102,7 +110,23 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     .ConfigureAwait(false);
 
                 var consumer = new AsyncEventingBasicConsumer(channel);
-                consumer.ReceivedAsync += OnMessageReceived;
+
+                async Task OnReceived(object sender, BasicDeliverEventArgs ea)
+                {
+                    await OnMessageReceived(channel, ea).ConfigureAwait(false);
+                }
+                consumer.ReceivedAsync += OnReceived;
+
+                var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                Task OnShutdown(object sender, ShutdownEventArgs e)
+                {
+                    consumer.ReceivedAsync -= OnReceived;
+                    shutdownTcs.TrySetResult(true);
+                    return Task.CompletedTask;
+                }
+
+                channel.ChannelShutdownAsync += OnShutdown;
 
                 var consumerTag = await channel.BasicConsumeAsync(
                     queue: _options.QueueName,
@@ -112,17 +136,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
-
-                var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-                Task OnShutdown(object sender, ShutdownEventArgs e)
-                {
-                    consumer.ReceivedAsync -= OnMessageReceived;
-                    shutdownTcs.TrySetResult(true);
-                    return Task.CompletedTask;
-                }
-
-                channel.ChannelShutdownAsync += OnShutdown;
 
                 try
                 {
@@ -161,7 +174,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private async Task OnMessageReceived(object sender, BasicDeliverEventArgs ea)
+    private async Task OnMessageReceived(IChannel channel, BasicDeliverEventArgs ea)
     {
         var body = ea.Body;
         var properties = ea.BasicProperties;
@@ -172,11 +185,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
         try
         {
-            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
+            await ProcessMessageAsync(channel, ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException and not ThreadAbortException)
         {
-            await HandlePoisonMessageAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            await HandlePoisonMessageAsync(channel, ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
         }
     }
 
@@ -190,7 +203,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// prevents an infinite requeue loop when the message body is corrupt, the schema is
     /// incompatible, or an event upgrader throws.
     /// </remarks>
-    private async Task ProcessMessageAsync(BasicDeliverEventArgs ea,
+    private async Task ProcessMessageAsync(IChannel channel,
+                                           BasicDeliverEventArgs ea,
                                            ReadOnlyMemory<byte> body,
                                            IReadOnlyBasicProperties properties,
                                            ulong deliveryTag,
@@ -202,7 +216,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         if (eventTypeName is null)
         {
             _logger.LogWarning("[Consumer:{Key}] Missing '{Header}' header — Nack (deliveryTag={Tag})", _consumerKey, MessageHeaders.EventType, deliveryTag);
-            await NackAsync(deliveryTag, requeue: false)
+            await NackAsync(channel, deliveryTag, requeue: false)
                 .ConfigureAwait(false);
             return;
         }
@@ -211,7 +225,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         if (resolved is null)
         {
             _logger.LogWarning("[Consumer:{Key}] No handler for '{EventType}' — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
-            await NackAsync(deliveryTag, requeue: false)
+            await NackAsync(channel, deliveryTag, requeue: false)
                 .ConfigureAwait(false);
             return;
         }
@@ -221,7 +235,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         if (isBatch)
         {
             _logger.LogWarning("[Consumer:{Key}] Handler for '{EventType}' is IBatchRabbitHandler<>, use batch consumer mode — Nack (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
-            await NackAsync(deliveryTag, requeue: false)
+            await NackAsync(channel, deliveryTag, requeue: false)
                 .ConfigureAwait(false);
             return;
         }
@@ -240,7 +254,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 if (oldEvent is null)
                 {
                     _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' v{Version} (deliveryTag={Tag})", _consumerKey, eventTypeName, eventVersion, deliveryTag);
-                    await NackAsync(deliveryTag, requeue: false)
+                    await NackAsync(channel, deliveryTag, requeue: false)
                         .ConfigureAwait(false);
                     return;
                 }
@@ -260,7 +274,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         if (@event is null)
         {
             _logger.LogError("[Consumer:{Key}] Failed to deserialize '{EventType}' (deliveryTag={Tag})", _consumerKey, eventTypeName, deliveryTag);
-            await NackAsync(deliveryTag, requeue: false)
+            await NackAsync(channel, deliveryTag, requeue: false)
                 .ConfigureAwait(false);
             return;
         }
@@ -277,7 +291,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 .ConfigureAwait(false);
             try
             {
-                await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken)
+                await InvokeHandlerWithRetryAsync(channel, handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -287,7 +301,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         else
         {
-            await InvokeHandlerWithRetryAsync(handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken)
+            await InvokeHandlerWithRetryAsync(channel, handlerType, @event, context, deliveryTag, deliveryCount, ea, body, properties, eventTypeName, parentContext, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -311,7 +325,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// If the retry-publish fails (broker/channel unavailable), fall back to NACK with
     /// requeue=true to preserve at-least-once semantics without losing the message.
     /// </remarks>
-    private async Task HandlePoisonMessageAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception ex, int deliveryCount)
+    private async Task HandlePoisonMessageAsync(IChannel channel, BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception ex, int deliveryCount)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType) ?? "<unknown>";
 
@@ -336,9 +350,9 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 .ConfigureAwait(false);
 
             if (publishSucceeded)
-                await AckAsync(ea.DeliveryTag).ConfigureAwait(false);
+                await AckAsync(channel, ea.DeliveryTag).ConfigureAwait(false);
             else
-                await NackAsync(ea.DeliveryTag, requeue: true).ConfigureAwait(false);
+                await NackAsync(channel, ea.DeliveryTag, requeue: true).ConfigureAwait(false);
 
         }
         else
@@ -356,13 +370,14 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 _logger.LogWarning("[Consumer:{Key}] Poison message retries exhausted ({Attempts}) — discarding message (EnableDeadLetter=false, deliveryTag={Tag})",
                     _consumerKey, deliveryCount, ea.DeliveryTag);
 
-            await NackAsync(ea.DeliveryTag, requeue: false).ConfigureAwait(false);
+            await NackAsync(channel, ea.DeliveryTag, requeue: false).ConfigureAwait(false);
 
             await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
         }
     }
 
-    private async Task InvokeHandlerWithRetryAsync(Type handlerType,
+    private async Task InvokeHandlerWithRetryAsync(IChannel channel,
+                                                   Type handlerType,
                                                    object @event,
                                                    MessageContext context,
                                                    ulong deliveryTag,
@@ -380,7 +395,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         if (handler is null)
         {
             _logger.LogError("[Consumer:{Key}] Handler '{HandlerType}' not in DI — Nack (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
-            await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+            await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
             return;
         }
 
@@ -395,7 +410,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             await invoker(handler, @event, context, cancellationToken)
                 .ConfigureAwait(false);
 
-            await AckAsync(deliveryTag)
+            await AckAsync(channel, deliveryTag)
                 .ConfigureAwait(false);
 
             _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
@@ -435,9 +450,9 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     .ConfigureAwait(false);
 
                 if (publishSucceeded)
-                    await AckAsync(deliveryTag).ConfigureAwait(false);
+                    await AckAsync(channel, deliveryTag).ConfigureAwait(false);
                 else
-                    await NackAsync(deliveryTag, requeue: true).ConfigureAwait(false);
+                    await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
             }
             else
             {
@@ -452,7 +467,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 else
                     _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — discarding message (EnableDeadLetter=false, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
 
-                await NackAsync(deliveryTag, requeue: false).ConfigureAwait(false);
+                await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
 
                 await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
             }
@@ -530,7 +545,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: ToBasicProperties(properties),
+                basicProperties: ToBasicProperties(properties, stripXDeath: true),
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[Consumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
@@ -661,20 +676,13 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
         var tParam = Expression.Parameter(typeof(CancellationToken), "t");
 
-        var call = Expression.Call(Expression.Convert(hParam, handlerInterface),
-            handleMethod,
-            Expression.Convert(eParam, eventType),
-            cParam,
-            tParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam, tParam);
 
         return Expression.Lambda<Func<object, object, MessageContext, CancellationToken, Task>>(call, hParam, eParam, cParam, tParam).Compile();
     }
 
-    private async Task AckAsync(ulong deliveryTag)
+    private async Task AckAsync(IChannel channel, ulong deliveryTag)
     {
-        var channel = _currentChannel;
-        if (channel is null) return;
-
         try
         {
             await channel.BasicAckAsync(deliveryTag: deliveryTag, multiple: false).ConfigureAwait(false);
@@ -685,11 +693,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private async Task NackAsync(ulong deliveryTag, bool requeue)
+    private async Task NackAsync(IChannel channel, ulong deliveryTag, bool requeue)
     {
-        var channel = _currentChannel;
-        if (channel is null) return;
-
         try
         {
             await channel.BasicNackAsync(deliveryTag: deliveryTag, multiple: false, requeue: requeue).ConfigureAwait(false);
@@ -861,7 +866,12 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     {
         if (_disposed) return default;
         _disposed = true;
+
+        try { _shutdownCts.Cancel(); }
+        catch (ObjectDisposedException) { }
+
         _concurrencyLimiter?.Dispose();
+        _shutdownCts.Dispose();
         return default;
     }
 }

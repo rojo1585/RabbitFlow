@@ -107,9 +107,20 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
             metrics: metrics);
     }
 
+    /// <summary>
+    /// Throws <see cref="ObjectDisposedException"/> if this instance has been disposed.
+    /// </summary>
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(CompositeEventPublisher),
+                "CompositeEventPublisher has been disposed. Publishing after disposal is not allowed.");
+    }
+
     /// <inheritdoc/>
     public Task PublishAsync<TEvent>(TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveDefaultProducer();
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
@@ -117,6 +128,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// <inheritdoc/>
     public Task PublishAsync<TEvent>(TEvent @event, string? correlationId, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveDefaultProducer();
         return producer.PublishAsync(@event, correlationId, routingKey, cancellationToken);
     }
@@ -124,6 +136,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// <inheritdoc/>
     public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveProducer(producerKey);
         return producer.PublishAsync(@event, routingKey, cancellationToken);
     }
@@ -131,6 +144,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// <inheritdoc/>
     public Task PublishAsync<TEvent>(string producerKey, TEvent @event, string? correlationId, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveProducer(producerKey);
         return producer.PublishAsync(@event, correlationId, routingKey, cancellationToken);
     }
@@ -138,6 +152,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// <inheritdoc/>
     public Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveDefaultProducer();
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);
     }
@@ -145,6 +160,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// <inheritdoc/>
     public Task PublishBatchAsync<TEvent>(string producerKey, IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class
     {
+        ThrowIfDisposed();
         var producer = ResolveProducer(producerKey);
         return producer.PublishBatchAsync(events, routingKey, cancellationToken);
     }

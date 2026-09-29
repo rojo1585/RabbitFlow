@@ -10,8 +10,6 @@ using RabbitFlow.Infrastructure.Versioning;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
-
-
 /// <summary>
 /// <see cref="BackgroundService"/> that starts and manages all configured consumers.
 /// Supports both individual (<see cref="NamedRabbitConsumer"/>) and batch
@@ -45,6 +43,7 @@ public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _conne
 
         _logger.LogInformation("Starting {Count} consumer(s)...", _consumerConfigs.Count);
 
+        var consumers = new List<IAsyncDisposable>(_consumerConfigs.Count);
         var consumerTasks = new List<Task>(_consumerConfigs.Count);
 
         foreach (var config in _consumerConfigs)
@@ -53,7 +52,7 @@ public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _conne
 
             if (config.EnableBatchConsumer)
             {
-                _logger.LogInformation("[Consumer:{Key}] Using BATCH mode (size={BatchSize}, timeout={TimeoutMs}ms) on queue '{Queue}'",config.ServiceKey, config.BatchSize, config.BatchTimeoutMs, config.QueueName);
+                _logger.LogInformation("[Consumer:{Key}] Using BATCH mode (size={BatchSize}, timeout={TimeoutMs}ms) on queue '{Queue}'", config.ServiceKey, config.BatchSize, config.BatchTimeoutMs, config.QueueName);
 
                 var batchConsumer = new NamedBatchRabbitConsumer(
                     consumerKey: config.ServiceKey,
@@ -65,11 +64,12 @@ public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _conne
                     logger: _loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
                     metrics: _metrics);
 
+                consumers.Add(batchConsumer);
                 consumerTasks.Add(batchConsumer.RunAsync(stoppingToken));
             }
             else
             {
-                _logger.LogInformation("[Consumer:{Key}] Using INDIVIDUAL mode on queue '{Queue}'",config.ServiceKey, config.QueueName);
+                _logger.LogInformation("[Consumer:{Key}] Using INDIVIDUAL mode on queue '{Queue}'", config.ServiceKey, config.QueueName);
 
                 var consumer = new NamedRabbitConsumer(
                     consumerKey: config.ServiceKey,
@@ -82,12 +82,30 @@ public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _conne
                     metrics: _metrics,
                     upgraderRegistry: _upgraderRegistry);
 
+                consumers.Add(consumer);
                 consumerTasks.Add(consumer.RunAsync(stoppingToken));
             }
         }
 
-        await Task.WhenAll(consumerTasks).ConfigureAwait(false);
+        try
+        {
+            await Task.WhenAll(consumerTasks).ConfigureAwait(false);
 
-        _logger.LogInformation("All consumers stopped.");
+            _logger.LogInformation("All consumers stopped.");
+        }
+        finally
+        {
+            foreach (var c in consumers)
+            {
+                try
+                {
+                    await c.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error disposing consumer during shutdown.");
+                }
+            }
+        }
     }
 }

@@ -145,9 +145,22 @@ public sealed record RabbitConsumerOptions
     /// Delay durations between retry attempts.
     /// Each entry creates a separate retry queue with the corresponding TTL.
     /// If null, defaults to [0s, 5s, 30s].
-    /// The array length should be at least <see cref="MaxRetries"/> - 1.
-    /// Index 0 is the delay before retry attempt 2, index 1 before attempt 3, etc.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Index 0 is the delay before retry attempt 2, index 1 before attempt 3, etc.
+    /// The array length must be at least <see cref="MaxRetries"/> - 1 (validated at startup).
+    /// Extra entries beyond <c>MaxRetries - 1</c> are allowed but unused — they still create
+    /// retry queues on the broker (topology side effect), so trim the array if you want to
+    /// avoid declaring unused retry queues.
+    /// </para>
+    /// <para>
+    /// <b>Default behavior with <see cref="MaxRetries"/> = 3:</b> only <c>Delays[0]</c> (0s)
+    /// and <c>Delays[1]</c> (5s) are used. The third entry (30s) is only used if you set
+    /// <see cref="MaxRetries"/> to 4 or higher. To avoid declaring an unused retry queue
+    /// for 30s, set <c>RetryDelays = [TimeSpan.Zero, TimeSpan.FromSeconds(5)]</c>.
+    /// </para>
+    /// </remarks>
     public TimeSpan[]? RetryDelays { get; init; }
 
     // ─── Batch Consumer Settings ──────────────────────────────────────

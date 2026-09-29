@@ -16,8 +16,6 @@ using System.Text;
 using System.Threading.Channels;
 
 namespace RabbitFlow.Infrastructure.Consuming;
-
-
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them in batches
 /// to registered <see cref="IBatchRabbitHandler{TEvent}"/> implementations.
@@ -115,15 +113,6 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                 }
                 consumer.ReceivedAsync += OnReceived;
 
-                var consumerTag = await channel.BasicConsumeAsync(
-                    queue: _options.QueueName,
-                    autoAck: false,
-                    consumerTag: _options.ConsumerTag ?? string.Empty,
-                    consumer: consumer,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                _logger.LogInformation("[BatchConsumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
-
                 var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                 Task OnShutdown(object sender, ShutdownEventArgs e)
@@ -134,6 +123,15 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                 }
 
                 channel.ChannelShutdownAsync += OnShutdown;
+
+                var consumerTag = await channel.BasicConsumeAsync(
+                    queue: _options.QueueName,
+                    autoAck: false,
+                    consumerTag: _options.ConsumerTag ?? string.Empty,
+                    consumer: consumer,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                _logger.LogInformation("[BatchConsumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
 
                 try
                 {
@@ -304,7 +302,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         var events = batch.Select(m => m.Event).ToList();
         var contexts = batch.Select(m => m.Context).ToList();
 
-        var deliveryCount = batch[0].Context.RetryCount + 1;
+        var deliveryCount = batch.Max(m => m.Context.RetryCount) + 1;
 
         using var processActivity = RabbitMqActivitySource.Source.StartActivity($"{firstEventTypeName} process", ActivityKind.Consumer);
 
@@ -439,7 +437,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
             await ProcessMessageAsync(ea, writer, body, properties, deliveryTag, retryCount)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException and not ThreadAbortException)
         {
             await HandlePoisonMessageAsync(ea, body, properties, ex, deliveryCount)
                 .ConfigureAwait(false);
@@ -672,7 +670,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: ToBasicProperties(properties),
+                basicProperties: ToBasicProperties(properties, stripXDeath: true),
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);

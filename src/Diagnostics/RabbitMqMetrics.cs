@@ -138,72 +138,72 @@ public sealed class RabbitMqMetrics : IDisposable
         _meter = new Meter(meterName, "1.0.0");
 
         Published = _meter.CreateCounter<long>(
-            name: "rabbitmq.published",
+            name: "rabbitflow.published",
             unit: "{message}",
             description: "Number of messages published to RabbitMQ.");
 
         PublishErrors = _meter.CreateCounter<long>(
-            name: "rabbitmq.publish_errors",
+            name: "rabbitflow.publish_errors",
             unit: "{error}",
             description: "Number of publish errors (nack, timeout, channel fault).");
 
         Consumed = _meter.CreateCounter<long>(
-            name: "rabbitmq.consumed",
+            name: "rabbitflow.consumed",
             unit: "{message}",
             description: "Number of messages successfully consumed and acknowledged.");
 
         ConsumeErrors = _meter.CreateCounter<long>(
-            name: "rabbitmq.consume_errors",
+            name: "rabbitflow.consume_errors",
             unit: "{error}",
             description: "Number of handler execution errors during consumption.");
 
         Retried = _meter.CreateCounter<long>(
-            name: "rabbitmq.retried",
+            name: "rabbitflow.retried",
             unit: "{message}",
             description: "Number of messages requeued for retry.");
 
         DeadLettered = _meter.CreateCounter<long>(
-            name: "rabbitmq.dead_lettered",
+            name: "rabbitflow.dead_lettered",
             unit: "{message}",
             description: "Number of messages sent to dead-letter queue.");
 
         ProcessingDurationMs = _meter.CreateHistogram<double>(
-            name: "rabbitmq.processing_duration_ms",
+            name: "rabbitflow.processing_duration_ms",
             unit: "ms",
             description: "Duration of handler execution in milliseconds.");
 
         PublishDurationMs = _meter.CreateHistogram<double>(
-            name: "rabbitmq.publish_duration_ms",
+            name: "rabbitflow.publish_duration_ms",
             unit: "ms",
             description: "Duration of publish operation in milliseconds.");
 
         BatchesDispatched = _meter.CreateCounter<long>(
-            name: "rabbitmq.batches_dispatched",
+            name: "rabbitflow.batches_dispatched",
             unit: "{batch}",
             description: "Number of batches dispatched by batch consumers.");
 
         BatchSize = _meter.CreateHistogram<int>(
-            name: "rabbitmq.batch_size",
+            name: "rabbitflow.batch_size",
             unit: "{message}",
             description: "Size of each dispatched batch.");
 
         ChannelPoolRented = _meter.CreateCounter<long>(
-            name: "rabbitmq.channel_pool.rented",
+            name: "rabbitflow.channel_pool.rented",
             unit: "{operation}",
             description: "Number of channel rentals from publisher channel pools.");
 
         ChannelPoolReturned = _meter.CreateCounter<long>(
-            name: "rabbitmq.channel_pool.returned",
+            name: "rabbitflow.channel_pool.returned",
             unit: "{operation}",
             description: "Number of channels returned to publisher channel pools.");
 
         ChannelPoolDiscarded = _meter.CreateCounter<long>(
-            name: "rabbitmq.channel_pool.discarded",
+            name: "rabbitflow.channel_pool.discarded",
             unit: "{operation}",
             description: "Number of channels discarded from publisher channel pools (faulted/dirty).");
 
         ChannelPoolCreated = _meter.CreateCounter<long>(
-            name: "rabbitmq.channel_pool.created",
+            name: "rabbitflow.channel_pool.created",
             unit: "{channel}",
             description: "Number of new channels created by publisher channel pools.");
     }
