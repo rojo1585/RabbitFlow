@@ -65,7 +65,7 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
 
             return default;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             return default;
         }
@@ -84,7 +84,7 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
 
             return type.IsInstanceOfType(envelope.Payload) ? envelope.Payload : null;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             return default;
         }
@@ -121,10 +121,9 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
 
             return null;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             return null;
         }
-
     }
 }
