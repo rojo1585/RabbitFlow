@@ -304,7 +304,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         var events = batch.Select(m => m.Event).ToList();
         var contexts = batch.Select(m => m.Context).ToList();
 
-        var deliveryCount = batch[0].Context.RetryCount + 1;
+        var deliveryCount = batch.Max(m => m.Context.RetryCount) + 1;
 
         using var processActivity = RabbitMqActivitySource.Source.StartActivity($"{firstEventTypeName} process", ActivityKind.Consumer);
 
@@ -672,7 +672,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: ToBasicProperties(properties),
+                basicProperties: ToBasicProperties(properties, stripXDeath: true),
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
