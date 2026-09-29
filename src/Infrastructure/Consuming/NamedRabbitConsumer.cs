@@ -128,15 +128,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     }
                     consumer.ReceivedAsync += OnReceived;
 
-                    var consumerTag = await channel.BasicConsumeAsync(
-                        queue: _options.QueueName,
-                        autoAck: false,
-                        consumerTag: _options.ConsumerTag ?? string.Empty,
-                        consumer: consumer,
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                    _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
-
                     var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                     Task OnShutdown(object sender, ShutdownEventArgs e)
@@ -147,6 +138,15 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     }
 
                     channel.ChannelShutdownAsync += OnShutdown;
+
+                    var consumerTag = await channel.BasicConsumeAsync(
+                        queue: _options.QueueName,
+                        autoAck: false,
+                        consumerTag: _options.ConsumerTag ?? string.Empty,
+                        consumer: consumer,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
 
                     try
                     {
@@ -204,7 +204,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         {
             await ProcessMessageAsync(channel, ea, body, properties, deliveryTag, retryCount, deliveryCount, _handlerToken).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException and not ThreadAbortException)
         {
             await HandlePoisonMessageAsync(channel, ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
         }
@@ -693,11 +693,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var cParam = Expression.Parameter(typeof(MessageContext), "c");
         var tParam = Expression.Parameter(typeof(CancellationToken), "t");
 
-        var call = Expression.Call(Expression.Convert(hParam, handlerInterface),
-            handleMethod,
-            Expression.Convert(eParam, eventType),
-            cParam,
-            tParam);
+        var call = Expression.Call(Expression.Convert(hParam, handlerInterface), handleMethod, Expression.Convert(eParam, eventType), cParam, tParam);
 
         return Expression.Lambda<Func<object, object, MessageContext, CancellationToken, Task>>(call, hParam, eParam, cParam, tParam).Compile();
     }
