@@ -3,7 +3,6 @@ using RabbitFlow.Abstractions;
 using RabbitFlow.Exceptions;
 
 namespace RabbitFlow.Infrastructure.Versioning;
-
 /// <summary>
 /// Describes a registered upgrader: from version, to version, upgrader type, and the compiled upgrade function.
 /// </summary>
@@ -84,11 +83,6 @@ public sealed class EventUpgraderRegistry
                 highestVersions[entry.EventName] = entry.ToVersion;
                 latestTypes[entry.EventName] = entry.ToType;
             }
-            if (!highestVersions.TryGetValue(entry.EventName, out highest) || entry.FromVersion > highest)
-            {
-                highestVersions[entry.EventName] = entry.FromVersion;
-                latestTypes[entry.EventName] = entry.FromType;
-            }
 
             // Add to chain
             if (!chains.TryGetValue(entry.EventName, out var chain))
@@ -104,6 +98,18 @@ public sealed class EventUpgraderRegistry
         foreach (var (eventName, chain) in chains)
         {
             var sorted = chain.OrderBy(e => e.FromVersion).ToArray();
+
+            if (sorted[0].FromVersion != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Event '{eventName}' upgrade chain must start at version 1, but the first " +
+                    $"registered upgrader starts at version {sorted[0].FromVersion}. " +
+                    $"Messages arriving with a version lower than {sorted[0].FromVersion} would be " +
+                    $"silently deserialized as the latest version, causing field loss and data corruption. " +
+                    $"Register an upgrader from version 1 (e.g., IEventUpgrader<V1, V2>) or ensure " +
+                    $"the handler's event type is marked with [EventVersion(\"{eventName}\", 1)].");
+            }
+
             for (int i = 0; i < sorted.Length - 1; i++)
             {
                 if (sorted[i].ToVersion != sorted[i + 1].FromVersion)
