@@ -1,11 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Text;
+﻿using System.Diagnostics;
 
 namespace RabbitFlow.Diagnostics;
-
-
 /// <summary>
 /// Central <see cref="ActivitySource"/> for all distributed tracing.
 /// 
@@ -59,7 +54,10 @@ public static class RabbitMqActivitySource
     /// <summary>
     /// Initializes the <see cref="SourceName"/> and <see cref="Source"/> with a custom name.
     /// Called once internally by <c>AddRabbitMQ()</c>.
-    /// Subsequent calls are ignored.
+    /// Subsequent calls with the same name are no-ops.
+    /// Subsequent calls with a different name throw <see cref="InvalidOperationException"/>
+    /// because RabbitFlow uses a static <see cref="ActivitySource"/> — only one instrumentation
+    /// name per process is supported.
     /// </summary>
     /// <param name="name">
     /// The instrumentation name. Must match what is passed to <c>AddSource()</c>
@@ -67,11 +65,35 @@ public static class RabbitMqActivitySource
     /// </param>
     internal static void Initialize(string name)
     {
-        if (IsInitialized) return;
+        if (IsInitialized)
+        {
+            if (name != SourceName)
+            {
+                throw new InvalidOperationException(
+                    $"RabbitMqActivitySource has already been initialized with instrumentation name '{SourceName}', " +
+                    $"but Initialize was called again with '{name}'. " +
+                    $"RabbitFlow uses a static ActivitySource, so only one instrumentation name per process is supported. " +
+                    $"Either use the same instrumentation name for all RabbitFlow registrations in this process, " +
+                    $"or isolate the ActivitySource per test host / app domain.");
+            }
+            return;
+        }
 
         lock (Lock)
         {
-            if (IsInitialized) return;
+            if (IsInitialized)
+            {
+                if (name != SourceName)
+                {
+                    throw new InvalidOperationException(
+                        $"RabbitMqActivitySource has already been initialized with instrumentation name '{SourceName}', " +
+                        $"but Initialize was called again with '{name}'. " +
+                        $"RabbitFlow uses a static ActivitySource, so only one instrumentation name per process is supported. " +
+                        $"Either use the same instrumentation name for all RabbitFlow registrations in this process, " +
+                        $"or isolate the ActivitySource per test host / app domain.");
+                }
+                return;
+            }
 
             SourceName = name;
             Source = new ActivitySource(name, "1.0.0");
