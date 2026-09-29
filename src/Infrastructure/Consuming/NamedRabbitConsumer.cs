@@ -57,6 +57,21 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// </summary>
     private readonly CancellationTokenSource _shutdownCts = new();
 
+    /// <summary>
+    /// Linked CTS combining the hosted service's <c>stoppingToken</c> with <see cref="_shutdownCts"/>.
+    /// Created at the start of <see cref="RunAsync"/> and disposed when it exits. Its token is
+    /// exposed to <see cref="OnMessageReceived"/> via <see cref="_handlerToken"/> (an event handler
+    /// cannot receive extra parameters).
+    /// </summary>
+    private CancellationTokenSource? _linkedCts;
+
+    /// <summary>
+    /// Token handed to handlers in <see cref="OnMessageReceived"/>. Backed by <see cref="_linkedCts"/>
+    /// once <see cref="RunAsync"/> has started; <c>CancellationToken.None</c> otherwise (safe default
+    /// for a struct field — handlers simply observe no cancellation before the consumer starts).
+    /// </summary>
+    private CancellationToken _handlerToken;
+
     public NamedRabbitConsumer(string consumerKey,
                                RabbitConsumerOptions options,
                                ManagedConnection connection,
@@ -88,76 +103,87 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     {
         _logger.LogInformation("[Consumer:{Key}] Starting consumer loop → queue '{Queue}'", _consumerKey, _options.QueueName);
 
-        while (!cancellationToken.IsCancellationRequested && !_disposed)
+        _linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        _handlerToken = _linkedCts.Token;
+
+        try
         {
-            IChannel? channel = null;
-            try
+            while (!cancellationToken.IsCancellationRequested && !_disposed)
             {
-                channel = await _connection.CreateChannelAsync(cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-
-                _currentChannel = channel;
-
-                await InitializeChannelAsync(channel, cancellationToken)
-                    .ConfigureAwait(false);
-
-                var consumer = new AsyncEventingBasicConsumer(channel);
-                consumer.ReceivedAsync += OnMessageReceived;
-
-                var consumerTag = await channel.BasicConsumeAsync(
-                    queue: _options.QueueName,
-                    autoAck: false,
-                    consumerTag: _options.ConsumerTag ?? string.Empty,
-                    consumer: consumer,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
-
-                var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-                Task OnShutdown(object sender, ShutdownEventArgs e)
-                {
-                    consumer.ReceivedAsync -= OnMessageReceived;
-                    shutdownTcs.TrySetResult(true);
-                    return Task.CompletedTask;
-                }
-
-                channel.ChannelShutdownAsync += OnShutdown;
-
+                IChannel? channel = null;
                 try
                 {
-                    using var reg = cancellationToken.Register(() => shutdownTcs.TrySetCanceled());
-                    await shutdownTcs.Task.ConfigureAwait(false);
+                    channel = await _connection.CreateChannelAsync(cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    _currentChannel = channel;
+
+                    await InitializeChannelAsync(channel, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var consumer = new AsyncEventingBasicConsumer(channel);
+                    consumer.ReceivedAsync += OnMessageReceived;
+
+                    var consumerTag = await channel.BasicConsumeAsync(
+                        queue: _options.QueueName,
+                        autoAck: false,
+                        consumerTag: _options.ConsumerTag ?? string.Empty,
+                        consumer: consumer,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    _logger.LogInformation("[Consumer:{Key}] Consuming from '{Queue}' (tag={Tag}, prefetch={Prefetch}, singleActive={SingleActive})", _consumerKey, _options.QueueName, consumerTag, _options.PrefetchCount, _options.SingleActiveConsumer);
+
+                    var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                    Task OnShutdown(object sender, ShutdownEventArgs e)
+                    {
+                        consumer.ReceivedAsync -= OnMessageReceived;
+                        shutdownTcs.TrySetResult(true);
+                        return Task.CompletedTask;
+                    }
+
+                    channel.ChannelShutdownAsync += OnShutdown;
+
+                    try
+                    {
+                        using var reg = cancellationToken.Register(() => shutdownTcs.TrySetCanceled());
+                        await shutdownTcs.Task.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        channel.ChannelShutdownAsync -= OnShutdown;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogInformation("[Consumer:{Key}] Consumer loop stopped", _consumerKey);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
+
+                    try
+                    {
+                        await Task.Delay(2000, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
                 }
                 finally
                 {
-                    channel.ChannelShutdownAsync -= OnShutdown;
+                    _currentChannel = null;
+                    if (channel is not null)
+                        await SafeCloseChannelAsync(channel).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogInformation("[Consumer:{Key}] Consumer loop stopped", _consumerKey);
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[Consumer:{Key}] Channel/consume error, reconnecting in 2s...", _consumerKey);
-
-                try
-                {
-                    await Task.Delay(2000, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
-            finally
-            {
-                _currentChannel = null;
-                if (channel is not null)
-                    await SafeCloseChannelAsync(channel).ConfigureAwait(false);
-            }
+        }
+        finally
+        {
+            _linkedCts?.Dispose();
+            _linkedCts = null;
         }
     }
 
@@ -172,7 +198,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
         try
         {
-            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
+            await ProcessMessageAsync(ea, body, properties, deliveryTag, retryCount, deliveryCount, _handlerToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -861,7 +887,12 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     {
         if (_disposed) return default;
         _disposed = true;
+
+        try { _shutdownCts.Cancel(); }
+        catch (ObjectDisposedException) { }
+
         _concurrencyLimiter?.Dispose();
+        _shutdownCts.Dispose();
         return default;
     }
 }
