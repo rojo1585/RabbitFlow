@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">RabbitFlow</h1>
 <p align="center">
-  <b>Enterprise-grade, high-throughput RabbitMQ client framework for .NET 8, 9, and 10</b>
+  <b>RabbitMQ client framework for .NET 8, 9, and 10 — multi-broker, channel pooling, batch consumer, event versioning, retry/DLQ, OpenTelemetry</b>
 </p>
 
 <p align="center">
@@ -15,7 +15,8 @@
   <a href="#-multi-broker-support">Multi-Broker</a> •
   <a href="#-resilience--dlq">Resilience &amp; DLQ</a> •
   <a href="#-configuration-reference">Configuration</a> •
-  <a href="#-observability--metrics">Metrics</a>
+  <a href="#-observability--metrics">Metrics</a> •
+  <a href="STATUS.md">Project Status</a>
 </p>
 
 <p align="center">
@@ -27,17 +28,19 @@
 
 ---
 
+> **📋 Project Status:** RabbitFlow is **pre-1.0** (active development). It is suitable for **pilot deployments** in non-critical services. See [STATUS.md](STATUS.md) for known limitations, technical debt, and the adoption recommendation.
+
 ## ⚡ Features
 
 | Feature | Description |
 |---|---|
 | 🌐 **Multi-Broker Support** | Connect to multiple RabbitMQ brokers, clusters, or vhosts simultaneously within a single app. Each producer and consumer binds to a named connection. |
-| ⚡ **Channel Pooling** | High-throughput producer channel reuse using `SemaphoreSlim` backpressure — eliminates channel-per-publish overhead. |
+| ⚡ **Channel Pooling** | Producer channel reuse using `SemaphoreSlim` backpressure — eliminates channel-per-publish overhead. |
 | 📦 **Batch Consumer** | Buffer high-volume messages in-memory and execute bulk processing with size/timeout triggers. |
-| 🔄 **Event Versioning** | Transparently upgrade legacy event schemas to latest contracts via `IEventUpgrader<TFrom, TTo>` chains. Cycles and downgrades are rejected at startup. |
-| 🛡️ **Resilience & DLQ** | Client-side retry with exponential backoff, automatic Dead-Letter Queue (DLQ) topology setup, and poison-message protection. One NACK = one copy (no amplification). |
-| 📊 **Native OpenTelemetry** | Out-of-the-box distributed tracing (`ActivitySource`) and custom metrics (`Meter`). |
-| 🩺 **Health Checks** | Native ASP.NET Core health check integration for individual connections and aggregate cluster health. |
+| 🔄 **Event Versioning** | Transparently upgrade legacy event schemas to latest contracts via `IEventUpgrader<TFrom, TTo>` chains. Cycles, downgrades, and gaps are rejected at startup. |
+| 🛡️ **Resilience & DLQ** | Client-side retry with configurable delays, automatic Dead-Letter Queue (DLQ) topology setup, and poison-message protection. One NACK = one copy (no amplification). |
+| 📊 **OpenTelemetry** | Distributed tracing (`ActivitySource`) and metrics (`Meter`) with W3C traceparent propagation. |
+| 🩺 **Health Checks** | ASP.NET Core health check integration for individual connections and aggregate cluster health. |
 | ✅ **Fail-Fast Validation** | `IValidateOptions<T>` + `ValidateOnStart()` validates all configuration bounds at startup — no silent hangs in runtime. |
 
 ---
@@ -299,7 +302,7 @@ public class OrderService(IEventPublisher publisher)
 ### 📥 Batch Consumer
 Process high-throughput workloads (e.g., bulk database inserts) by accumulating messages in-memory.
 
-> 💡 **Tip:** Use batch processing when throughput exceeds 5,000 msg/sec to drastically reduce I/O bottlenecks.
+> 💡 **Tip:** Batch processing reduces I/O bottlenecks when handlers perform bulk operations (e.g., `AddRangeAsync`, `ExecuteAsync`). The exact throughput threshold depends on your workload and broker capacity — benchmark with your own data before committing to batch mode.
 
 `appsettings.json`:
 ```json
@@ -340,14 +343,18 @@ public class NotificationBatchHandler : IBatchRabbitHandler<NotificationEvent>
 ### 🏊 Channel Pooling
 By default, each producer holds a managed pool of AMQP channels. Publishes rent a channel, execute the operation, and return it back to the pool.
 
-> ⚡ **Important:** Creating and destroying channels per publish is the #1 cause of throughput limits in AMQP applications. Channel pooling eliminates this latency entirely.
+> ⚡ **Important:** Creating and destroying channels per publish is a significant throughput bottleneck in AMQP applications. Channel pooling reuses channels across publishes to avoid this overhead.
 
-| Pool Size | Publisher Confirms | Estimated Throughput |
+**Configuration:**
+
+| Pool Size | Publisher Confirms | Behavior |
 |---|---|---|
-| **4** | Enabled | 40,000 – 80,000 msg/s |
-| **8** | Enabled | 80,000 – 150,000 msg/s |
-| **4** | Disabled | 100,000 – 200,000 msg/s |
-| **0** | — | Channel-per-publish (Backward compatibility) |
+| **4** (default) | Enabled (default) | Balanced durability and throughput for most workloads |
+| **8** | Enabled | Higher concurrency for high-volume producers |
+| **4** | Disabled | Higher throughput when durability on publish is not required |
+| **0** | — | Channel-per-publish (no pooling; backward compatibility) |
+
+> ⚠️ **Note:** Specific throughput numbers (msg/s) depend heavily on broker hardware, network latency, message size, and payload serialization cost. The table above describes the **behavior** of each configuration; it does not promise specific msg/s figures. Benchmark with your own workload before sizing production capacity. See [STATUS.md](STATUS.md) for details.
 
 ### 🔀 Event Versioning
 Upgrade historical message contracts without disrupting running production consumers.
@@ -377,13 +384,16 @@ builder.Services.AddEventUpgrader<OrderV1ToV2Upgrader>();
 **Safety guarantees (validated at startup):**
 - ✅ **No cycles:** `ToVersion` must be strictly greater than `FromVersion`. Self-loops (V1→V1), downgrades (V3→V2), and cycles (V1→V2→V1) are rejected with `InvalidOperationException`.
 - ✅ **No gaps:** Each upgrader's `ToVersion` must match the next upgrader's `FromVersion`.
+- ✅ **Chain starts at v1:** The first upgrader's `FromVersion` must be `1`. Chains that start at a higher version (e.g., only `V2→V3` registered) are rejected — otherwise v1 messages would be silently deserialized as the latest version, causing field loss.
 - ✅ **Newer-than-highest rejected:** If a message arrives with a version higher than the highest registered (e.g., message is V5 but consumer only knows up to V3), `EventVersionNewerThanRegisteredException` is thrown and the message is routed to retry/DLQ via the poison-message handler — no silent field loss.
 
 ---
 
 ## 🛡️ Resilience & DLQ
 
-RabbitFlow provides client-side retry with automatic Dead-Letter Queue topology. This ensures exactly-once routing to the DLQ (no message amplification).
+RabbitFlow provides client-side retry with automatic Dead-Letter Queue topology. This ensures one routing decision per failure (no message amplification) — the message is ACKed after being republished to a retry queue, or NACKed with `requeue=false` to dead-letter it.
+
+> **Note:** RabbitFlow guarantees **at-least-once** delivery (the broker may redeliver on reconnect or retry). Handlers must be idempotent. See [STATUS.md](STATUS.md) for the full list of delivery semantics and known limitations.
 
 ### How It Works
 ```text
@@ -549,6 +559,10 @@ builder.Services.AddOpenTelemetry()
 | `rabbitflow.processing_duration_ms` | Histogram | `consumer_key`, `event_type`, `queue` |
 | `rabbitflow.batches_dispatched` | Counter | `consumer_key`, `event_type`, `queue` |
 | `rabbitflow.batch_size` | Histogram | `consumer_key`, `event_type`, `queue` |
+| `rabbitflow.channel_pool.rented` | Counter | `producer_key` |
+| `rabbitflow.channel_pool.returned` | Counter | `producer_key` |
+| `rabbitflow.channel_pool.discarded` | Counter | `producer_key` |
+| `rabbitflow.channel_pool.created` | Counter | `producer_key` |
 
 ### Health Checks
 ```csharp
@@ -569,10 +583,22 @@ RabbitFlow owns the reconnection lifecycle. The driver's built-in auto-recovery 
 3. The background loop wakes up, applies exponential backoff (1s → 2s → 4s → ... → `MaxBackoffSeconds` cap), and creates a new `IConnection`.
 4. Publishers and consumers re-declare topology idempotently on the new connection.
 
-This ensures exactly one reconnection path and a single source of truth for the live `IConnection` — no duplicate TCP connections during broker restarts.
+This ensures one reconnection path and a single source of truth for the live `IConnection` — no duplicate TCP connections during broker restarts.
+
+> 📖 See [CONCURRENCY.md](CONCURRENCY.md) for the full concurrency analysis and the invariants that future contributors must preserve when modifying connection, channel pool, or consumer code.
 
 ---
 
 ## 📄 License
 
-[MIT](LICENSE) — see LICENSE for details.
+[MIT](LICENSE) — see [LICENSE](LICENSE) for details.
+
+---
+
+## 📋 Project Status
+
+RabbitFlow is **pre-1.0** (active development). See [STATUS.md](STATUS.md) for:
+- Known limitations (by design)
+- Known technical debt
+- Roadmap (post-1.0)
+- Adoption recommendation (pilot in non-critical services first)
