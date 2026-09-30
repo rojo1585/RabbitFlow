@@ -38,7 +38,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// <param name="_logger">
 /// The logger instance used to output connection events and status updates.
 /// </param>
-public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
+internal sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
     private readonly object _lock = new();
     private IConnection? _connection;
@@ -436,3 +436,4 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         }
     }
 }
+

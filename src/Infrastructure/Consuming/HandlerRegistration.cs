@@ -19,7 +19,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// by <c>NamedRabbitPublisher</c> in the <c>x-event-type</c> header.
 /// </param>
 /// <param name="IsBatch">Whether this is a batch handler (<c>IBatchRabbitHandler&lt;T&gt;</c>).</param>
-public sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName, bool IsBatch = false);
+internal sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, Type EventType, string EventTypeName, bool IsBatch = false);
 
 /// <summary>
 /// Maps (consumerKey, eventTypeName) to (handlerType, eventType, isBatch) at runtime.
@@ -37,7 +37,7 @@ public sealed record HandlerRegistration(string ConsumerKey, Type HandlerType, T
 /// Thread safety: Immutable after construction.
 /// </para>
 /// </summary>
-public sealed class HandlerTypeRegistry
+internal sealed class HandlerTypeRegistry
 {
     private readonly Dictionary<(string ConsumerKey, string EventTypeName), (Type HandlerType, Type EventType, bool IsBatch)> _lookup;
 

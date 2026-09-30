@@ -26,7 +26,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// <c>StartAsync</c> dependencies.
 /// </para>
 /// </summary>
-internal sealed class ConnectionInitializerHostedService(IRabbitConnectionRegistry registry, ILogger<ConnectionInitializerHostedService> logger) : IHostedService
+internal sealed class ConnectionInitializerHostedService(RabbitConnectionRegistry registry, ILogger<ConnectionInitializerHostedService> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {

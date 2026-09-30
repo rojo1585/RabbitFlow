@@ -33,7 +33,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     private readonly NamedRabbitPublisher? _defaultProducer;
     private bool _disposed;
 
-    public CompositeEventPublisher(IRabbitConnectionRegistry connectionRegistry,
+    public CompositeEventPublisher(RabbitConnectionRegistry connectionRegistry,
                                    IMessageSerializer serializer,
                                    IEnumerable<RabbitProducerOptions> producerConfigs,
                                    ILoggerFactory loggerFactory,
@@ -92,7 +92,7 @@ internal sealed class CompositeEventPublisher : IEventPublisher, IBatchEventPubl
     /// Separated for readability in the constructor loop.
     /// </summary>
     private static NamedRabbitPublisher CreatePublisher(RabbitProducerOptions config,
-                                                        IRabbitConnectionRegistry connectionRegistry,
+                                                        RabbitConnectionRegistry connectionRegistry,
                                                         IMessageSerializer serializer,
                                                         ILoggerFactory loggerFactory,
                                                         RabbitMqMetrics metrics)

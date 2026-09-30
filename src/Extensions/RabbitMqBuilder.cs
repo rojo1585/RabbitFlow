@@ -17,6 +17,7 @@ namespace RabbitFlow.Extensions;
 
 
 
+
 /// <summary>
 /// Fluent builder for configuring RabbitMQ services.
 /// Obtained via <c>services.AddRabbitMQ(...)</c>.
@@ -124,12 +125,12 @@ public sealed class RabbitMqBuilder
         if (_services.Any(d => d.ServiceType == typeof(ConfiguredMarker)))
         {
             throw new InvalidOperationException(
-                "AddRabbitMQ has already been called on this service collection. " +
-                "Multiple AddRabbitMQ calls are not supported because they would silently " +
-                "overwrite the first call's configuration, replace the HandlerTypeRegistry " +
-                "(losing registered handlers), and leak the first RabbitMqMetrics instance. " +
-                "To connect to multiple brokers, vhosts, or clusters, add multiple entries " +
-                "to the Connections dictionary in a single AddRabbitMQ call instead.");
+                @$"AddRabbitMQ has already been called on this service collection. 
+                Multiple AddRabbitMQ calls are not supported because they would silently 
+                overwrite the first call's configuration, replace the HandlerTypeRegistry 
+                (losing registered handlers), and leak the first RabbitMqMetrics instance. 
+                To connect to multiple brokers, vhosts, or clusters, add multiple entries 
+                to the Connections dictionary in a single AddRabbitMQ call instead.");
         }
 
         _services.AddSingleton<ConfiguredMarker>();
@@ -161,8 +162,8 @@ public sealed class RabbitMqBuilder
         _services.AddSingleton(new RabbitMqMetrics(instrName));
 
         // 3. Connection Registry
-
-        _services.AddSingleton<IRabbitConnectionRegistry, RabbitConnectionRegistry>();
+        _services.AddSingleton<RabbitConnectionRegistry>();
+        _services.AddSingleton<IRabbitConnectionRegistry>(sp => sp.GetRequiredService<RabbitConnectionRegistry>());
 
         // 4. Handler Registry
         _services.AddSingleton<HandlerTypeRegistry>();
@@ -177,7 +178,7 @@ public sealed class RabbitMqBuilder
         _services.AddSingleton<CompositeEventPublisher>(sp =>
         {
             var settings = sp.GetRequiredService<IOptions<RabbitMqSettings>>().Value;
-            var registry = sp.GetRequiredService<IRabbitConnectionRegistry>();
+            var registry = sp.GetRequiredService<RabbitConnectionRegistry>();
             var serializer = sp.GetRequiredService<IMessageSerializer>();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var metrics = sp.GetRequiredService<RabbitMqMetrics>();

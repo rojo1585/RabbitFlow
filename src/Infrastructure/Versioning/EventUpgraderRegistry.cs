@@ -6,7 +6,7 @@ namespace RabbitFlow.Infrastructure.Versioning;
 /// <summary>
 /// Describes a registered upgrader: from version, to version, upgrader type, and the compiled upgrade function.
 /// </summary>
-public sealed record UpgraderEntry(string EventName, int FromVersion, int ToVersion, Type FromType, Type ToType, Type UpgraderType, Func<object, object, object> UpgradeFunc);
+internal sealed record UpgraderEntry(string EventName, int FromVersion, int ToVersion, Type FromType, Type ToType, Type UpgraderType, Func<object, object, object> UpgradeFunc);
 
 /// <summary>
 /// Registry that holds all <see cref="IEventUpgrader{TFrom, TTo}"/> implementations.
@@ -27,7 +27,7 @@ public sealed record UpgraderEntry(string EventName, int FromVersion, int ToVers
 /// Thread safety: Immutable after construction.
 /// </para>
 /// </summary>
-public sealed class EventUpgraderRegistry
+internal sealed class EventUpgraderRegistry
 {
     /// <summary>
     /// Maps eventName → sorted chain of upgrader entries (by FromVersion).
@@ -102,21 +102,21 @@ public sealed class EventUpgraderRegistry
             if (sorted[0].FromVersion != 1)
             {
                 throw new InvalidOperationException(
-                    $"Event '{eventName}' upgrade chain must start at version 1, but the first " +
-                    $"registered upgrader starts at version {sorted[0].FromVersion}. " +
-                    $"Messages arriving with a version lower than {sorted[0].FromVersion} would be " +
-                    $"silently deserialized as the latest version, causing field loss and data corruption. " +
-                    $"Register an upgrader from version 1 (e.g., IEventUpgrader<V1, V2>) or ensure " +
-                    $"the handler's event type is marked with [EventVersion(\"{eventName}\", 1)].");
+                    $@"Event '{eventName}' upgrade chain must start at version 1, but the first 
+                    registered upgrader starts at version {sorted[0].FromVersion}. 
+                    Messages arriving with a version lower than {sorted[0].FromVersion} would be 
+                    silently deserialized as the latest version, causing field loss and data corruption. 
+                    Register an upgrader from version 1 (e.g., IEventUpgrader<V1, V2>) or ensure 
+                    the handler's event type is marked with [EventVersion({eventName}, 1)].");
             }
 
             for (int i = 0; i < sorted.Length - 1; i++)
             {
                 if (sorted[i].ToVersion != sorted[i + 1].FromVersion)
                 {
-                    throw new InvalidOperationException($"Event '{eventName}' upgrade chain is not continuous: " +
-                        $"upgrader v{sorted[i].FromVersion}→v{sorted[i].ToVersion} " +
-                        $"does not connect to v{sorted[i + 1].FromVersion}→v{sorted[i + 1].ToVersion}.");
+                    throw new InvalidOperationException($@"Event '{eventName}' upgrade chain is not continuous: 
+                        upgrader v{sorted[i].FromVersion}→v{sorted[i].ToVersion} 
+                        does not connect to v{sorted[i + 1].FromVersion}→v{sorted[i + 1].ToVersion}.");
                 }
             }
 
