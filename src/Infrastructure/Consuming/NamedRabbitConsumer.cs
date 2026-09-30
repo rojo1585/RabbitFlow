@@ -59,6 +59,16 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private volatile bool _disposed;
 
     /// <summary>
+    /// Set to true when the consumer begins graceful shutdown (stoppingToken fired).
+    /// Used by InvokeHandlerWithRetryAsync to distinguish OperationCanceledException
+    /// caused by shutdown (→ NACK with requeue, no retry count) from OCE caused by
+    /// handler logic (→ retry/DLQ path). This is checked INSTEAD of _shutdownCts.IsCancellationRequested
+    /// because the channel close (which happens during shutdown) can produce OCE before
+    /// _shutdownCts.Cancel() is called by GracefulDrainAsync.
+    /// </summary>
+    private volatile bool _isShuttingDown;
+
+    /// <summary>
     /// Cancellation token source whose <see cref="CancellationTokenSource.Token"/> is passed to
     /// handlers via the <c>CancellationToken</c> parameter in <see cref="OnMessageReceived"/>.
     /// It is cancelled in TWO places:
@@ -184,8 +194,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     await Task.WhenAny(shutdownTcs.Task, stoppingTcs.Task).ConfigureAwait(false);
 
                     if (stoppingTcs.Task.IsCompleted)
-                        await GracefulDrainAsync(channel, consumerTag).ConfigureAwait(false);
+                    {
 
+                        _isShuttingDown = true;
+                        await GracefulDrainAsync(channel, consumerTag).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {
@@ -560,7 +573,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            if (ex is OperationCanceledException && _shutdownCts.IsCancellationRequested)
+            if (_isShuttingDown && ex is OperationCanceledException)
             {
                 _logger.LogInformation("[Consumer:{Key}] Handler cancelled during graceful shutdown drain — NACK with requeue (deliveryTag={Tag})", _consumerKey, deliveryTag);
                 await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
@@ -960,16 +973,32 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         catch { }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        if (_disposed) return default;
+        if (_disposed) return;
         _disposed = true;
+
+        _isShuttingDown = true;
 
         try { _shutdownCts.Cancel(); }
         catch (ObjectDisposedException) { }
 
+        var drainDeadline = DateTime.UtcNow + _options.ShutdownDrainTimeout;
+        while (DateTime.UtcNow < drainDeadline)
+        {
+            if (GetInFlightCount() == 0)
+                break;
+
+            await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        var remaining = GetInFlightCount();
+        if (remaining > 0)
+        {
+            _logger.LogWarning("[Consumer:{Key}] DisposeAsync: {Count} handler(s) still in flight after drain timeout; disposing semaphore (they may throw ObjectDisposedException on Release).", _consumerKey, remaining);
+        }
+
         _concurrencyLimiter?.Dispose();
         _shutdownCts.Dispose();
-        return default;
     }
 }
