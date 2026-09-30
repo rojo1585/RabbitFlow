@@ -1,7 +1,5 @@
 ﻿namespace RabbitFlow.Diagnostics;
 
-
-
 /// <summary>
 /// Standard header names injected by the publisher and extracted by the consumer.
 /// These are stored as AMQP message headers (string keys, object values).
@@ -52,4 +50,12 @@ public static class MessageHeaders
     /// Header key: x-consumer-key
     /// </summary>
     public const string ConsumerKey = "x-consumer-key";
+
+    /// <summary>
+    /// RabbitFlow library header that tracks the delivery count for retry/DLQ decisions.
+    /// Incremented by the consumer each time the message is republished to a retry queue.
+    /// Read by ExtractRetryCount to determine whether a message should be retried or dead-lettered.
+    /// Not prefixed with "x-" because it is a library header, not a RabbitMQ built-in.
+    /// </summary>
+    public const string DeliveryCount = "rabbitflow-delivery-count";
 }

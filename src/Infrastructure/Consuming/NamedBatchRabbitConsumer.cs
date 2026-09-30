@@ -666,11 +666,18 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         try
         {
             retryChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
+
+            var props = ToBasicProperties(properties);
+            var currentRetryCount = ExtractRetryCount(properties);
+            var newRetryCount = currentRetryCount + 1;
+            props.Headers ??= new Dictionary<string, object?>();
+            props.Headers[MessageHeaders.DeliveryCount] = newRetryCount.ToString();
+
             await retryChannel.BasicPublishAsync(
                 exchange: string.Empty,
                 routingKey: retryQueueName,
                 mandatory: false,
-                basicProperties: ToBasicProperties(properties, stripXDeath: true),
+                basicProperties: props,
                 body: body).ConfigureAwait(false);
 
             _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
@@ -840,61 +847,10 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     }
     private int ExtractRetryCount(IReadOnlyBasicProperties properties)
     {
-        if (properties.Headers is null || !properties.Headers.TryGetValue("x-death", out var value))
-            return 0;
-
-        try
-        {
-            var deathEntries = value switch
-            {
-                IList list => list,
-                _ => null
-            };
-
-            if (deathEntries is null) return 0;
-
-            var totalDeaths = 0;
-            foreach (var entry in deathEntries)
-            {
-                if (entry is not IDictionary dict) continue;
-
-                var queueName = DecodeHeaderValue(dict["queue"]);
-                if (queueName is null) continue;
-
-                if (queueName == _options.QueueName || queueName.StartsWith($"{_options.QueueName}.retry."))
-                {
-                    if (DecodeHeaderValue(dict["count"]) is string countStr && long.TryParse(countStr, out var count))
-                        totalDeaths += (int)count;
-                    else if (dict["count"] is long countLong)
-                        totalDeaths += (int)countLong;
-                    else if (dict["count"] is int countInt)
-                        totalDeaths += countInt;
-                }
-            }
-
-            return totalDeaths;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "[BatchConsumer:{Key}] Failed to parse x-death header, assuming first delivery", _consumerKey);
-            return 0;
-        }
-    }
-
-    /// <summary>
-    /// Decodes an x-death header value to a string. RabbitMQ encodes strings as UTF-8 byte[]
-    /// in AMQP headers, so values may arrive as byte[], ReadOnlyMemory&lt;byte&gt;, or string.
-    /// </summary>
-    private static string? DecodeHeaderValue(object? value)
-    {
-        return value switch
-        {
-            string s => s,
-            byte[] bytes => System.Text.Encoding.UTF8.GetString(bytes),
-            ReadOnlyMemory<byte> rom => System.Text.Encoding.UTF8.GetString(rom.Span),
-            null => null,
-            _ => value.ToString(),
-        };
+        var countStr = GetHeaderString(properties, MessageHeaders.DeliveryCount);
+        if (countStr is not null && int.TryParse(countStr, out var count) && count >= 0)
+            return count;
+        return 0;
     }
 
     private static MessageContext BuildMessageContext(BasicDeliverEventArgs ea, int retryCount)
