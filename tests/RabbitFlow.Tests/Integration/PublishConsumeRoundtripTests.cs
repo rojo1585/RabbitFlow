@@ -89,7 +89,7 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
         var publisher = host.Services.GetRequiredService<IEventPublisher>();
         var @event = new OrderCreatedEvent(Guid.NewGuid(), "routed@test.com");
 
-        await publisher.PublishAsync(@event, routingKey: "order-created");
+        await publisher.PublishAsync(@event, new PublishOptions { RoutingKey = "order-created" });
 
         var received = await WaitForAsync(
             () => OrderCreatedHandler.Received.FirstOrDefault(e => e.OrderId == @event.OrderId),
@@ -198,3 +198,4 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
         throw new TimeoutException($"WaitForAsync timed out after {timeout.TotalSeconds}s");
     }
 }
+

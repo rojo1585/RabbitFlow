@@ -14,10 +14,6 @@ using RabbitFlow.Infrastructure.Versioning;
 using System.Text.Json;
 
 namespace RabbitFlow.Extensions;
-
-
-
-
 /// <summary>
 /// Fluent builder for configuring RabbitMQ services.
 /// Obtained via <c>services.AddRabbitMQ(...)</c>.
@@ -211,14 +207,19 @@ public sealed class RabbitMqBuilder
         {
             _services.AddSingleton<IMessageSerializer>(sp =>
             {
+                var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                 var options = new JsonSerializerOptions();
                 _jsonOptionsConfigure(options);
-                return new SystemTextJsonSerializer(options);
+                return new SystemTextJsonSerializer(options, loggerFactory);
             });
             return;
         }
 
-        _services.AddSingleton<IMessageSerializer, SystemTextJsonSerializer>();
+        _services.AddSingleton<IMessageSerializer>(sp =>
+        {
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            return new SystemTextJsonSerializer(loggerFactory);
+        });
     }
 
     private void AssertSerializerNotConfigured()

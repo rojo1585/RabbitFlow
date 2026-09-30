@@ -8,6 +8,7 @@ using RabbitFlow.Extensions;
 
 namespace RabbitFlow.Tests.Integration;
 
+
 [Collection(RabbitMqCollection.Name)]
 public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
 {
@@ -22,7 +23,7 @@ public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
         public string ConsumerKey => "system-consumer";
         public static readonly List<SystemEvent> Received = [];
 
-        public Task HandleAsync(SystemEvent @event, MessageContext context, CancellationToken   cancellationToken)
+        public Task HandleAsync(SystemEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
             Received.Add(@event);
             return Task.CompletedTask;
@@ -54,8 +55,8 @@ public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
         var sysEvent = new SystemEvent("monitor", "health-ok");
         var bizEvent = new BusinessEvent(Guid.NewGuid(), "order-123");
 
-        await publisher.PublishAsync("system-producer", sysEvent);
-        await publisher.PublishAsync("business-producer", bizEvent);
+        await publisher.PublishAsync(sysEvent, new PublishOptions { ProducerKey = "system-producer" });
+        await publisher.PublishAsync(bizEvent, new PublishOptions { ProducerKey = "business-producer" });
 
         var sysReceived = await WaitForAsync(() => SystemEventHandler.Received.FirstOrDefault(e => e.Source == "monitor"), timeout: TimeSpan.FromSeconds(10));
 
@@ -284,4 +285,3 @@ public class MultiConnectionAndPublisherConfirmsTests(RabbitMqFixture fixture)
         throw new TimeoutException($"WaitForAsync timed out after {timeout.TotalSeconds}s");
     }
 }
-

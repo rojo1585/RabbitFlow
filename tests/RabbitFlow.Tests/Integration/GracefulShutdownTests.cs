@@ -218,13 +218,6 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
     /// is generous (10s) and the in-flight handlers complete within that window (2s each),
     /// all handlers should run to completion (NOT be cancelled) and shutdown should complete
     /// well under the drain timeout + margin.
-    /// <para>
-    /// Regression guard: before the shutdown-drain fix, the consumer closed the channel
-    /// immediately on <c>host.StopAsync()</c> — in-flight handlers were abandoned mid-flight.
-    /// With the fix, <c>BasicCancelAsync</c> stops new deliveries, the consumer waits for
-    /// in-flight handlers (up to <c>ShutdownDrainTimeout</c>), ACKs the completed ones,
-    /// and only then closes the channel.
-    /// </para>
     /// </summary>
     [Fact]
     public async Task ShutdownDrain_AllowsInProgressHandlers_ToComplete()
@@ -275,13 +268,6 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
     /// waiting for the handler. After the drain timeout, the unfinished message is NACKed
     /// with requeue=true (so the broker redelivers it on the next consumer start) and the
     /// channel is closed.
-    /// <para>
-    /// Regression guard: before the shutdown-drain fix, shutdown either hung indefinitely
-    /// (if the consumer waited for handlers without a timeout) or cancelled handlers
-    /// abruptly (if the channel was closed immediately). With the fix, the consumer drains
-    /// up to <c>ShutdownDrainTimeout</c>, then abandons remaining in-flight handlers and
-    /// NACKs their messages with requeue so they are not lost.
-    /// </para>
     /// </summary>
     [Fact]
     public async Task ShutdownDrain_NacksUnfinishedMessages_WithRequeue_AfterTimeout()
