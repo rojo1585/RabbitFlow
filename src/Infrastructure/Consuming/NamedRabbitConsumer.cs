@@ -16,6 +16,7 @@ using System.Text;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
+
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them to
 /// registered <see cref="IRabbitHandler{T}"/> implementations.
@@ -45,6 +46,14 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private readonly ILogger<NamedRabbitConsumer> _logger;
     private readonly RabbitMqMetrics _metrics;
     private readonly SemaphoreSlim? _concurrencyLimiter;
+    /// <summary>
+    /// The initial count of <see cref="_concurrencyLimiter"/> (i.e., <c>MaxConcurrentHandlers</c>).
+    /// Stored separately because <see cref="SemaphoreSlim"/> does not expose <c>InitialCount</c>
+    /// (unlike <see cref="System.Threading.Semaphore"/>). Used by <see cref="GetInFlightCount"/>
+    /// to compute <c>_concurrencyLimiterInitialCount - _concurrencyLimiter.CurrentCount</c>
+    /// (permits held = in-flight handlers).
+    /// </summary>
+    private readonly int _concurrencyLimiterInitialCount;
     private readonly RetryPolicy? _retryPolicy;
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
@@ -52,18 +61,30 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     /// <summary>
     /// Cancellation token source whose <see cref="CancellationTokenSource.Token"/> is passed to
     /// handlers via the <c>CancellationToken</c> parameter in <see cref="OnMessageReceived"/>.
-    /// It is cancelled (and disposed) only in <see cref="DisposeAsync"/> — AFTER the
-    /// <see cref="RunAsync"/> loop has exited and in-flight handlers have had a chance to
-    /// complete during the graceful shutdown window.
-    /// <para>
-    /// The hosted service's <c>stoppingToken</c> stops <see cref="RunAsync"/> from accepting
-    /// NEW messages (via the existing <c>shutdownTcs</c> mechanism), but in-flight handlers
-    /// continue to observe this token (NOT cancelled) until the consumer is disposed. This
-    /// matches the expected graceful-shutdown behavior: in-flight handlers complete
-    /// naturally; only the dispatch loop is stopped.
-    /// </para>
+    /// It is cancelled in TWO places:
+    /// <list type="bullet">
+    ///   <item>In <see cref="GracefulDrainAsync"/>, AFTER the drain timeout expires — so
+    ///   cooperative in-flight handlers can abort and have their messages NACKed with requeue
+    ///   (no retry count) by <see cref="InvokeHandlerWithRetryAsync"/>'s catch block.</item>
+    ///   <item>In <see cref="DisposeAsync"/>, as a final safety net (consumer is being
+    ///   disposed, no further handler invocations are possible).</item>
+    /// </list>
+    /// During the drain window (before the timeout), the token is NOT cancelled, so
+    /// in-flight handlers can complete naturally and ACK their messages (no data loss).
     /// </summary>
     private readonly CancellationTokenSource _shutdownCts = new();
+
+    /// <summary>
+    /// Tracks the number of in-flight message handlers (entered <see cref="OnMessageReceived"/>
+    /// but not yet returned). Used by <see cref="GracefulDrainAsync"/> to wait for in-flight
+    /// handlers to complete during graceful shutdown when <see cref="_concurrencyLimiter"/> is
+    /// not configured (i.e., <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> == 0).
+    /// When the limiter IS configured, <see cref="_concurrencyLimiterInitialCount"/> minus
+    /// <see cref="SemaphoreSlim.CurrentCount"/> already tracks in-flight work, so this field
+    /// is redundant but still maintained for uniformity (cost: a single <c>Interlocked</c> op
+    /// per message — negligible).
+    /// </summary>
+    private int _inFlightCount;
 
     public NamedRabbitConsumer(string consumerKey,
                                RabbitConsumerOptions options,
@@ -86,7 +107,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         _metrics = metrics;
 
         if (options.MaxConcurrentHandlers > 0)
+        {
             _concurrencyLimiter = new SemaphoreSlim(options.MaxConcurrentHandlers);
+            _concurrencyLimiterInitialCount = options.MaxConcurrentHandlers;
+        }
 
         if (options.EnableRetry)
             _retryPolicy = new RetryPolicy(options);
@@ -101,7 +125,24 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             IChannel? channel = null;
             try
             {
-                channel = await _connection.CreateChannelAsync(cancellationToken: cancellationToken)
+                CreateChannelOptions? channelOptions = null;
+                if (_options.MaxConcurrentHandlers > 0)
+                {
+                    var dispatchConcurrency = (ushort)Math.Min(65535, _options.MaxConcurrentHandlers);
+                    channelOptions = new CreateChannelOptions(
+                        publisherConfirmationsEnabled: false,
+                        publisherConfirmationTrackingEnabled: false,
+                        consumerDispatchConcurrency: dispatchConcurrency);
+                }
+                else if (_options.PrefetchCount > 1)
+                {
+                    channelOptions = new CreateChannelOptions(
+                        publisherConfirmationsEnabled: false,
+                        publisherConfirmationTrackingEnabled: false,
+                        consumerDispatchConcurrency: _options.PrefetchCount);
+                }
+
+                channel = await _connection.CreateChannelAsync(channelOptions, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 _currentChannel = channel;
@@ -110,7 +151,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     .ConfigureAwait(false);
 
                 var consumer = new AsyncEventingBasicConsumer(channel);
-
                 async Task OnReceived(object sender, BasicDeliverEventArgs ea)
                 {
                     await OnMessageReceived(channel, ea).ConfigureAwait(false);
@@ -125,7 +165,6 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     shutdownTcs.TrySetResult(true);
                     return Task.CompletedTask;
                 }
-
                 channel.ChannelShutdownAsync += OnShutdown;
 
                 var consumerTag = await channel.BasicConsumeAsync(
@@ -139,8 +178,14 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
                 try
                 {
-                    using var reg = cancellationToken.Register(() => shutdownTcs.TrySetCanceled());
-                    await shutdownTcs.Task.ConfigureAwait(false);
+                    var stoppingTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    using var reg = cancellationToken.Register(() => stoppingTcs.TrySetResult(true));
+
+                    await Task.WhenAny(shutdownTcs.Task, stoppingTcs.Task).ConfigureAwait(false);
+
+                    if (stoppingTcs.Task.IsCompleted)
+                        await GracefulDrainAsync(channel, consumerTag).ConfigureAwait(false);
+
                 }
                 finally
                 {
@@ -174,22 +219,112 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
     }
 
-    private async Task OnMessageReceived(IChannel channel, BasicDeliverEventArgs ea)
+    /// <summary>
+    /// Performs the graceful-shutdown drain protocol:
+    /// <list type="number">
+    ///   <item>Cancels the consumer (broker stops delivering NEW messages) via
+    ///   <c>BasicCancelAsync</c>.</item>
+    ///   <item>Polls the in-flight handler count (either via <see cref="_concurrencyLimiter"/>
+    ///   when configured, or via <see cref="_inFlightCount"/> for the unlimited case) until
+    ///   it reaches zero or <see cref="RabbitConsumerOptions.ShutdownDrainTimeout"/> elapses.</item>
+    ///   <item>If the drain timeout expires with handlers still in flight, cancels
+    ///   <see cref="_shutdownCts"/> so the handlers' <c>CancellationToken</c> (passed via
+    ///   <see cref="ProcessMessageAsync"/>) fires — cooperative handlers will throw
+    ///   <see cref="OperationCanceledException"/>, which <see cref="InvokeHandlerWithRetryAsync"/>
+    ///   routes to a NACK-with-requeue WITHOUT counting as a retry. Non-cooperative handlers
+    ///   continue running; their messages are re-queued by the broker when the channel is
+    ///   closed by the outer <see cref="RunAsync"/> finally block.</item>
+    /// </list>
+    /// This method is only invoked when the host's stoppingToken fires (graceful app shutdown).
+    /// When the channel closes naturally (broker restart / fault), the channel is already gone
+    /// so there is nothing to drain — <see cref="RunAsync"/> skips this method in that case.
+    /// </summary>
+    /// <param name="channel">The channel the consumer is currently consuming from.</param>
+    /// <param name="consumerTag">The consumer tag returned by <c>BasicConsumeAsync</c>.</param>
+    private async Task GracefulDrainAsync(IChannel channel, string consumerTag)
     {
-        var body = ea.Body;
-        var properties = ea.BasicProperties;
-        var deliveryTag = ea.DeliveryTag;
+        try
+        {
+            await channel.BasicCancelAsync(consumerTag, cancellationToken: CancellationToken.None)
+                .ConfigureAwait(false);
+            _logger.LogInformation("[Consumer:{Key}] Consumer cancelled; draining in-flight handlers (timeout={Timeout}s)...", _consumerKey, _options.ShutdownDrainTimeout.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Consumer:{Key}] BasicCancelAsync failed during graceful drain", _consumerKey);
+        }
 
-        var retryCount = ExtractRetryCount(properties);
-        var deliveryCount = retryCount + 1;
+        var drainDeadline = DateTime.UtcNow + _options.ShutdownDrainTimeout;
+        while (DateTime.UtcNow < drainDeadline)
+        {
+            if (GetInFlightCount() == 0)
+            {
+                _logger.LogInformation("[Consumer:{Key}] All in-flight handlers completed during graceful drain.", _consumerKey);
+                return;
+            }
+
+            await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        var remaining = GetInFlightCount();
+        _logger.LogWarning("[Consumer:{Key}] Graceful drain timeout expired with {Count} in-flight handler(s); cancelling handler token (will NACK with requeue, no retry count).",
+            _consumerKey, remaining);
 
         try
         {
-            await ProcessMessageAsync(channel, ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
+            _shutdownCts.Cancel();
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException and not ThreadAbortException)
+        catch (ObjectDisposedException) { }
+
+        if (remaining > 0)
         {
-            await HandlePoisonMessageAsync(channel, ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(500, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    /// <summary>
+    /// Returns the number of currently in-flight message handlers. When
+    /// <see cref="_concurrencyLimiter"/> is configured (MaxConcurrentHandlers > 0), uses
+    /// <see cref="_concurrencyLimiterInitialCount"/> minus <see cref="SemaphoreSlim.CurrentCount"/>
+    /// (permits held by handlers). Otherwise uses the <see cref="_inFlightCount"/> counter
+    /// maintained by <see cref="OnMessageReceived"/>.
+    /// </summary>
+    private int GetInFlightCount()
+    {
+        if (_concurrencyLimiter is not null)
+            return _concurrencyLimiterInitialCount - _concurrencyLimiter.CurrentCount;
+
+        return Volatile.Read(ref _inFlightCount);
+    }
+
+    private async Task OnMessageReceived(IChannel channel, BasicDeliverEventArgs ea)
+    {
+        Interlocked.Increment(ref _inFlightCount);
+        try
+        {
+            var body = ea.Body;
+            var properties = ea.BasicProperties;
+            var deliveryTag = ea.DeliveryTag;
+
+            var retryCount = ExtractRetryCount(properties);
+            var deliveryCount = retryCount + 1;
+
+            try
+            {
+                await ProcessMessageAsync(channel, ea, body, properties, deliveryTag, retryCount, deliveryCount, _shutdownCts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException and not ThreadAbortException)
+            {
+                await HandlePoisonMessageAsync(channel, ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlightCount);
         }
     }
 
@@ -425,6 +560,13 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            if (ex is OperationCanceledException && _shutdownCts.IsCancellationRequested)
+            {
+                _logger.LogInformation("[Consumer:{Key}] Handler cancelled during graceful shutdown drain — NACK with requeue (deliveryTag={Tag})", _consumerKey, deliveryTag);
+                await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+                return;
+            }
+
             _metrics.ConsumeErrors.Add(1,
                 new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
                 new(RabbitMqMetrics.TagEventType, eventTypeName),

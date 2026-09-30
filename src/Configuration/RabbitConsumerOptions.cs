@@ -1,7 +1,4 @@
 ﻿namespace RabbitFlow.Configuration;
-
-
-
 /// <summary>
 /// Defines a message consumer bound to a specific queue, exchange, and connection.
 /// The <see cref="ServiceKey"/> is used to map <see cref="Abstractions.IRabbitHandler{T}"/>
@@ -69,6 +66,23 @@ public sealed record RabbitConsumerOptions
     /// process one batch at a time.
     /// </remarks>
     public int MaxConcurrentHandlers { get; init; } = 0;
+
+    /// <summary>
+    /// Maximum time to wait for in-flight handlers to complete during graceful shutdown
+    /// before force-cancelling them. When the hosted service receives the stopping token,
+    /// the consumer stops accepting new messages (BasicCancelAsync) and waits up to this
+    /// duration for handlers currently executing to finish. Handlers that don't complete
+    /// within this timeout are cancelled; their messages are NACKed with requeue=true
+    /// (without incrementing the retry count) so the broker redelivers them on the next
+    /// startup.
+    /// Defaults to 30 seconds.
+    /// </summary>
+    /// <remarks>
+    /// Set this to a value comfortably larger than the slowest handler's expected duration.
+    /// If your handlers call external APIs with their own timeouts, ensure this value is
+    /// greater than the sum of those timeouts plus a safety margin.
+    /// </remarks>
+    public TimeSpan ShutdownDrainTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     // ─── Dead Letter Settings ──────────────────────────────────────────
 

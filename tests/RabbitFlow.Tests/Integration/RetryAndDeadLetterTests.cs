@@ -8,6 +8,7 @@ using RabbitFlow.Extensions;
 using RabbitMQ.Client;
 namespace RabbitFlow.Tests.Integration;
 
+
 [Collection(RabbitMqCollection.Name)]
 public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
 {
@@ -16,6 +17,9 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
 
     [EventVersion("retry-isolation-event", 1)]
     public record RetryIsolationEvent(Guid Id) : IIntegrationEvent;
+
+    [EventVersion("concurrency-event", 1)]
+    public record ConcurrencyEvent(Guid Id) : IIntegrationEvent;
 
     private class FlakyHandler : IRabbitHandler<FlakyEvent>
     {
@@ -73,6 +77,59 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             Interlocked.Increment(ref ReceivedCount);
             ReceivedIds.Add(@event.Id);
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Handler that tracks how many handler invocations are running concurrently.
+    /// Used to verify that <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/>
+    /// actually enables concurrent handler execution: the RabbitMQ.Client dispatcher
+    /// must deliver more than one message at a time (which requires
+    /// <c>consumerDispatchConcurrency</c> to be set on the channel, not the default of 1).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="CurrentConcurrent"/> counts in-flight invocations (incremented on entry,
+    /// decremented on exit). <see cref="MaxConcurrent"/> records the maximum value of
+    /// <see cref="CurrentConcurrent"/> observed across all invocations (lock-free CAS loop).
+    /// <see cref="ProcessedCount"/> counts handlers that completed successfully.
+    /// </para>
+    /// <para>
+    /// Each invocation delays 500ms to force overlap with subsequent deliveries. If the
+    /// dispatcher is serial (consumerDispatchConcurrency = 1), MaxConcurrent stays at 1
+    /// because only one message is ever in flight. Once the dispatcher is concurrent,
+    /// MaxConcurrent rises to at least 2.
+    /// </para>
+    /// </remarks>
+    private class ConcurrencyTrackingHandler : IRabbitHandler<ConcurrencyEvent>
+    {
+        public string ConsumerKey => "concurrency-consumer";
+        public static int CurrentConcurrent;
+        public static int MaxConcurrent;
+        public static int ProcessedCount;
+
+        public async Task HandleAsync(ConcurrencyEvent @event, MessageContext context, CancellationToken cancellationToken)
+        {
+            var current = Interlocked.Increment(ref CurrentConcurrent);
+
+            // Track the maximum concurrency observed via a lock-free CAS loop.
+            int observedMax;
+            do
+            {
+                observedMax = Volatile.Read(ref MaxConcurrent);
+                if (current <= observedMax) break;
+            } while (Interlocked.CompareExchange(ref MaxConcurrent, current, observedMax) != observedMax);
+
+            try
+            {
+                // Delay to force overlap between handler invocations.
+                await Task.Delay(500, cancellationToken);
+                Interlocked.Increment(ref ProcessedCount);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref CurrentConcurrent);
+            }
         }
     }
 
@@ -321,7 +378,8 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
         await Task.Delay(2000);
 
         // Act — publish a single message to the fanout exchange.
-        // The broker delivers one copy to queueA (A will fail and retry) and one copy to queueB 
+        // The broker delivers one copy to queueA (A will fail and retry) and one copy to
+        // queueB (B will succeed immediately).
         var publisher = host.Services.GetRequiredService<IEventPublisher>();
         var eventId = Guid.NewGuid();
         await publisher.PublishAsync(new RetryIsolationEvent(eventId));
@@ -348,6 +406,55 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             "handler B should have received exactly the published event id, exactly once.");
 
         await host.StopAsync();
+    }
+
+    /// <summary>
+    /// Regression test for the MaxConcurrentHandlers fix: with
+    /// <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> set to 5 and
+    /// <see cref="RabbitConsumerOptions.PrefetchCount"/> set to 5, the dispatcher
+    /// must deliver more than one message at a time so that handler invocations
+    /// overlap.
+    /// <para>
+    /// Before the fix, RabbitMQ.Client 7's default <c>consumerDispatchConcurrency = 1</c>
+    /// meant the dispatcher only delivered one message at a time, so
+    /// <c>MaxConcurrentHandlers</c> had no observable effect. This test FAILS in
+    /// that scenario (<see cref="ConcurrencyTrackingHandler.MaxConcurrent"/> == 1)
+    /// and PASSES once the channel is created with <c>consumerDispatchConcurrency</c>
+    /// set (<see cref="ConcurrencyTrackingHandler.MaxConcurrent"/> &gt;= 2).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task MaxConcurrentHandlers_AllowsConcurrentHandlerExecution()
+    {
+        // Arrange — reset static state on the concurrency handler.
+        ConcurrencyTrackingHandler.CurrentConcurrent = 0;
+        ConcurrencyTrackingHandler.MaxConcurrent = 0;
+        ConcurrencyTrackingHandler.ProcessedCount = 0;
+
+        const string exchangeName = "concurrency-test";
+        const string queueName = "concurrency-test-queue";
+
+        using var host = await BuildHostForConcurrencyAsync(exchangeName, queueName);
+
+        var publisher = host.Services.GetRequiredService<IEventPublisher>();
+
+        // Act — publish 5 messages.
+        for (var i = 0; i < 5; i++)
+            await publisher.PublishAsync(new ConcurrencyEvent(Guid.NewGuid()));
+
+        // Wait for all 5 to be processed.
+        await WaitForAsync(() => ConcurrencyTrackingHandler.ProcessedCount >= 5, TimeSpan.FromSeconds(15));
+
+        // Give a small grace window for the MaxConcurrent counter to settle
+        // (the max is recorded on entry, before the delay, so by this point all
+        // 5 invocations have entered and the maximum is final).
+        await Task.Delay(500);
+
+        // Assert — all 5 were processed AND at least 2 ran concurrently.
+        ConcurrencyTrackingHandler.ProcessedCount.Should().Be(5, "all 5 messages should be processed");
+        ConcurrencyTrackingHandler.MaxConcurrent.Should().BeGreaterOrEqualTo(2,
+            "with MaxConcurrentHandlers=5 and PrefetchCount=5, at least 2 handlers should run concurrently. " +
+            "If MaxConcurrent is 1, the dispatcher is serial (bug: consumerDispatchConcurrency not set).");
     }
 
     private async Task<IHost> BuildHostAsync()
@@ -462,6 +569,72 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             });
 
             services.AddRabbitHandler<FlakyHandler>("flaky-consumer");
+        });
+
+        var host = hostBuilder.Build();
+        await host.StartAsync();
+        await Task.Delay(2000);
+        return host;
+    }
+
+    /// <summary>
+    /// Builds a host whose consumer enables concurrent handler execution:
+    /// <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> = 5 and
+    /// <see cref="RabbitConsumerOptions.PrefetchCount"/> = 5. The dispatcher must
+    /// deliver up to 5 messages at a time so the handler invocations overlap.
+    /// Retry and DLQ are disabled to keep the test focused (the handler always
+    /// succeeds, so there is no DLQ/retry path to exercise).
+    /// </summary>
+    private async Task<IHost> BuildHostForConcurrencyAsync(string exchangeName, string queueName)
+    {
+        var hostBuilder = Host.CreateDefaultBuilder();
+
+        hostBuilder.ConfigureServices(services =>
+        {
+            services.AddRabbitMQ(settings =>
+            {
+                settings.Connections["main"] = new RabbitConnectionOptions
+                {
+                    Name = "main",
+                    HostName = fixture.HostName,
+                    Port = fixture.Port,
+                    UserName = fixture.UserName,
+                    Password = fixture.Password,
+                    RequestedHeartbeatSeconds = 10,
+                    ConnectionTimeoutSeconds = 10,
+                    InitialConnectRetryCount = 3,
+                    MaxBackoffSeconds = 5
+                };
+
+                settings.Producers.Add(new RabbitProducerOptions
+                {
+                    ServiceKey = "concurrency-producer",
+                    ConnectionName = "main",
+                    ExchangeName = exchangeName,
+                    ExchangeType = "direct",
+                    RoutingKey = "concurrency-event",
+                    EnablePublisherConfirms = true,
+                    PublishConfirmTimeoutMs = 5_000,
+                    ChannelPoolSize = 2
+                });
+
+                settings.Consumers.Add(new RabbitConsumerOptions
+                {
+                    ServiceKey = "concurrency-consumer",
+                    ConnectionName = "main",
+                    ExchangeName = exchangeName,
+                    ExchangeType = "direct",
+                    QueueName = queueName,
+                    RoutingKey = "concurrency-event",
+                    PrefetchCount = 5,
+                    MaxConcurrentHandlers = 5, // KEY: enable concurrent handlers
+                    EnableDeadLetter = false,   // handler always succeeds — no DLQ needed
+                    EnableRetry = false,
+                    MaxRetries = 1
+                });
+            });
+
+            services.AddRabbitHandler<ConcurrencyTrackingHandler>("concurrency-consumer");
         });
 
         var host = hostBuilder.Build();
