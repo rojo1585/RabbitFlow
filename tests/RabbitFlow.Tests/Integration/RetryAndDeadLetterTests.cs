@@ -8,7 +8,6 @@ using RabbitFlow.Extensions;
 using RabbitMQ.Client;
 namespace RabbitFlow.Tests.Integration;
 
-
 [Collection(RabbitMqCollection.Name)]
 public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
 {
@@ -23,7 +22,6 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
 
     private class FlakyHandler : IRabbitHandler<FlakyEvent>
     {
-        public string ConsumerKey => "flaky-consumer";
         public static int AttemptCount;
         public static readonly List<FlakyEvent> SucceededEvents = [];
         public static bool NextAttemptSucceeds;
@@ -49,7 +47,6 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
     /// </summary>
     private class FailingHandlerA : IRabbitHandler<RetryIsolationEvent>
     {
-        public string ConsumerKey => "retry-isolation-a";
         public static int AttemptCount;
 
         public Task HandleAsync(RetryIsolationEvent @event, MessageContext context, CancellationToken cancellationToken)
@@ -68,7 +65,6 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
     /// </summary>
     private class SucceedingHandlerB : IRabbitHandler<RetryIsolationEvent>
     {
-        public string ConsumerKey => "retry-isolation-b";
         public static int ReceivedCount;
         public static readonly List<Guid> ReceivedIds = [];
 
@@ -103,7 +99,6 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
     /// </remarks>
     private class ConcurrencyTrackingHandler : IRabbitHandler<ConcurrencyEvent>
     {
-        public string ConsumerKey => "concurrency-consumer";
         public static int CurrentConcurrent;
         public static int MaxConcurrent;
         public static int ProcessedCount;
@@ -313,14 +308,12 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -467,14 +460,12 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -529,14 +520,12 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -595,14 +584,12 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 

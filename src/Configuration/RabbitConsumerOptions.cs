@@ -8,14 +8,17 @@ public sealed record RabbitConsumerOptions
 {
     /// <summary>
     /// Unique identifier for this consumer.
-    /// Handlers set their <see cref="Abstractions.IRabbitHandler{T}.ConsumerKey"/>
-    /// to this value to be invoked for messages from this queue.
+    /// Handlers are registered against this value via
+    /// <c>AddRabbitHandler&lt;THandler&gt;(consumerKey)</c> (or
+    /// <c>AddBatchRabbitHandler&lt;THandler&gt;(consumerKey)</c>) to be invoked
+    /// for messages from this queue.
     /// Must be unique across all consumers.
     /// </summary>
     public required string ServiceKey { get; init; }
 
     /// <summary>
-    /// References <see cref="RabbitConnectionOptions.Name"/> to determine
+    /// References the connection's dictionary key in
+    /// <see cref="RabbitMqSettings.Connections"/> to determine
     /// which connection this consumer uses.
     /// </summary>
     public required string ConnectionName { get; init; }

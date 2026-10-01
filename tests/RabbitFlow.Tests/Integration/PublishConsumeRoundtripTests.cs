@@ -19,7 +19,6 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
 
     private class OrderCreatedHandler : IRabbitHandler<OrderCreatedEvent>
     {
-        public string ConsumerKey => "orders-consumer";
         public static readonly List<OrderCreatedEvent> Received = [];
 
         public Task HandleAsync(OrderCreatedEvent @event, MessageContext context, CancellationToken cancellationToken)
@@ -116,14 +115,12 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -198,4 +195,3 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
         throw new TimeoutException($"WaitForAsync timed out after {timeout.TotalSeconds}s");
     }
 }
-

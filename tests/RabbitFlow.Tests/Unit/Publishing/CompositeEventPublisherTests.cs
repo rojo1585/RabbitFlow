@@ -37,7 +37,6 @@ public class CompositeEventPublisherTests
         var settings = new RabbitMqSettings();
         settings.Connections["main"] = new RabbitConnectionOptions
         {
-            Name = "main",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"
@@ -91,3 +90,4 @@ public class CompositeEventPublisherTests
         act.Should().NotThrow();
     }
 }
+

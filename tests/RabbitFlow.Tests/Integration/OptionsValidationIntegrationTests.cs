@@ -19,16 +19,15 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         {
             services.AddRabbitMQ(settings =>
             {
-                settings.Connections["main"] = new ()
+                settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password
                 };
 
-                settings.Producers.Add(new ()
+                settings.Producers.Add(new()
                 {
                     ServiceKey = "test",
                     ConnectionName = "main",
@@ -39,7 +38,7 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         });
 
         using var host = hostBuilder.Build();
-       var ct = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
         var act = () => host.StartAsync(ct.Token);
 
@@ -56,16 +55,15 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         {
             services.AddRabbitMQ(settings =>
             {
-                settings.Connections["main"] = new ()
+                settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password
                 };
 
-                settings.Producers.Add(new ()
+                settings.Producers.Add(new()
                 {
                     ServiceKey = "broken",
                     ConnectionName = "nonexistent",
@@ -91,16 +89,15 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         {
             services.AddRabbitMQ(settings =>
             {
-                settings.Connections["main"] = new ()
+                settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password
                 };
 
-                settings.Producers.Add(new ()
+                settings.Producers.Add(new()
                 {
                     ServiceKey = "dup",
                     ConnectionName = "main",
@@ -108,7 +105,7 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
                     RoutingKey = "rk"
                 });
 
-                settings.Producers.Add(new ()
+                settings.Producers.Add(new()
                 {
                     ServiceKey = "dup",
                     ConnectionName = "main",
@@ -135,9 +132,8 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         {
             services.AddRabbitMQ(settings =>
             {
-                settings.Connections["main"] = new ()
+                settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
@@ -157,3 +153,4 @@ public class OptionsValidationIntegrationTests(RabbitMqFixture fixture)
         await host.StopAsync(TimeSpan.FromSeconds(10));
     }
 }
+

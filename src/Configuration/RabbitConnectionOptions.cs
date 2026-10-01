@@ -9,15 +9,14 @@ namespace RabbitFlow.Configuration;
 /// Defines connection parameters for a single RabbitMQ connection.
 /// Each named connection can point to a different host, port, or virtual host.
 /// </summary>
+/// <remarks>
+/// The connection name is the dictionary key under
+/// <see cref="RabbitMqSettings.Connections"/> — there is no <c>Name</c> property
+/// on this type. The dictionary key is the single source of truth used by
+/// producers and consumers to reference which connection they should use.
+/// </remarks>
 public sealed class RabbitConnectionOptions
 {
-    /// <summary>
-    /// Unique identifier for this connection. Used by producers and consumers
-    /// to reference which connection they should use.
-    /// Must be unique across all connections in the configuration.
-    /// </summary>
-    public required string Name { get; init; }
-
     /// <summary>
     /// RabbitMQ server hostname or IP address.
     /// </summary>
@@ -57,14 +56,6 @@ public sealed class RabbitConnectionOptions
     public int ConnectionTimeoutSeconds { get; init; } = 30;
 
     /// <summary>
-    /// Maximum number of retry attempts for initial connection.
-    /// After exhausting retries, the connection will keep trying indefinitely
-    /// with the maximum backoff delay.
-    /// Defaults to 5.
-    /// </summary>
-    public int InitialConnectRetryCount { get; init; } = 5;
-
-    /// <summary>
     /// Maximum backoff delay in seconds for reconnection attempts.
     /// Defaults to 60 seconds.
     /// </summary>
@@ -83,10 +74,9 @@ public sealed class RabbitConnectionOptions
     /// </remarks>
     /// <example>
     /// <code>
-    /// // Cloud broker with server TLS
-    /// new RabbitConnectionOptions
+    /// // Cloud broker with server TLS — the dictionary key is the connection name.
+    /// settings.Connections["cloud"] = new RabbitConnectionOptions
     /// {
-    ///     Name = "cloud",
     ///     HostName = "b-123.mq.amazonaws.com",
     ///     Port = 5671,
     ///     UserName = "user",
@@ -94,10 +84,9 @@ public sealed class RabbitConnectionOptions
     ///     Tls = new TlsOptions { Enabled = true }
     /// };
     /// 
-    /// // mTLS with client certificate
-    /// new RabbitConnectionOptions
+    /// // mTLS with client certificate — the dictionary key is the connection name.
+    /// settings.Connections["onprem"] = new RabbitConnectionOptions
     /// {
-    ///     Name = "onprem",
     ///     HostName = "rabbit.internal",
     ///     Port = 5671,
     ///     UserName = "user",

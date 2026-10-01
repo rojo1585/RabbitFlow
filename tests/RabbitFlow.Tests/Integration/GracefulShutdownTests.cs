@@ -18,13 +18,11 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
     public record ShutdownEvent(Guid Id) : IIntegrationEvent;
     private class SlowHandler : IRabbitHandler<ShutdownEvent>
     {
-        public string ConsumerKey => "shutdown-consumer";
         public static int ProcessedCount;
         public static readonly List<Guid> ProcessedIds = [];
 
         public async Task HandleAsync(ShutdownEvent @event, MessageContext context, CancellationToken cancellationToken)
         {
-            // Simulate work
             await Task.Delay(500, cancellationToken);
             Interlocked.Increment(ref ProcessedCount);
             ProcessedIds.Add(@event.Id);
@@ -33,7 +31,6 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
 
     private class UncancellableSlowHandler : IRabbitHandler<ShutdownEvent>
     {
-        public string ConsumerKey => "shutdown-consumer";
         public static int ProcessedCount;
         public static readonly List<Guid> ProcessedIds = [];
         public static int StartedCount;
@@ -46,10 +43,8 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             ProcessedIds.Add(@event.Id);
         }
     }
-
     private class BlockingHandler : IRabbitHandler<ShutdownEvent>
     {
-        public string ConsumerKey => "shutdown-consumer";
         public static int StartedCount;
         public static int CompletedCount;
 
@@ -74,14 +69,12 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -143,14 +136,12 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -285,14 +276,12 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 
@@ -332,6 +321,7 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
 
         var host = hostBuilder.Build();
         await host.StartAsync();
+
         await Task.Delay(2000);
         return host;
     }

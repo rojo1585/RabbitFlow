@@ -30,7 +30,7 @@ namespace RabbitFlow.Configuration;
 ///   RabbitMQ.Client consumerDispatchConcurrency), <c>ShutdownDrainTimeout</c> &gt;= 0,
 ///   <c>ChannelPoolSize</c> &gt;= 0,
 ///   <c>PublishConfirmTimeoutMs</c> &gt; 0, <c>RequestedHeartbeatSeconds</c> &gt; 0,
-///   <c>ConnectionTimeoutSeconds</c> &gt; 0, <c>InitialConnectRetryCount</c> &gt;= 0,
+///   <c>ConnectionTimeoutSeconds</c> &gt; 0,
 ///   <c>MaxBackoffSeconds</c> &gt; 0.</item>
 ///   <item>When retry is enabled, <c>RetryDelays</c> (if provided) must have at least
 ///   <c>MaxRetries</c> - 1 entries so every retry attempt has a delay.</item>
@@ -76,7 +76,6 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
         {
             var prefix = $"Connection '{key}'";
 
-            ValidateNonEmptyString(errors, conn.Name, $"{prefix}: Name");
             ValidateNonEmptyString(errors, conn.HostName, $"{prefix}: HostName");
             ValidateNonEmptyString(errors, conn.UserName, $"{prefix}: UserName");
             ValidateNonEmptyString(errors, conn.Password, $"{prefix}: Password");
@@ -89,9 +88,6 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
 
             if (conn.ConnectionTimeoutSeconds < 1)
                 errors.Add($"{prefix}: ConnectionTimeoutSeconds must be >= 1 (got {conn.ConnectionTimeoutSeconds}).");
-
-            if (conn.InitialConnectRetryCount < 0)
-                errors.Add($"{prefix}: InitialConnectRetryCount must be >= 0 (got {conn.InitialConnectRetryCount}).");
 
             if (conn.MaxBackoffSeconds < 1)
                 errors.Add($"{prefix}: MaxBackoffSeconds must be >= 1 (got {conn.MaxBackoffSeconds}).");
@@ -169,7 +165,7 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
             // crash SemaphoreSlim constructor.
             if (consumer.MaxConcurrentHandlers < 0)
                 errors.Add($"{prefix}: MaxConcurrentHandlers must be >= 0 (got {consumer.MaxConcurrentHandlers}). Use 0 for unlimited.");
-
+           
             if (consumer.MaxConcurrentHandlers > 65535)
                 errors.Add($"{prefix}: MaxConcurrentHandlers must be <= 65535 (got {consumer.MaxConcurrentHandlers}). RabbitMQ.Client consumerDispatchConcurrency is a ushort (max 65535). Use 0 for unlimited.");
 
