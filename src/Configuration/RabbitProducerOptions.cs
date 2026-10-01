@@ -15,7 +15,6 @@ public sealed class RabbitProducerOptions
     public required string ServiceKey { get; init; }
 
     /// <summary>
-    /// References <see cref="RabbitConnectionOptions.Name"/> to determine
     /// which connection this producer uses.
     /// </summary>
     public required string ConnectionName { get; init; }

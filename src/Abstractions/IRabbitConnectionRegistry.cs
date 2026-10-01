@@ -10,9 +10,7 @@ public interface IRabbitConnectionRegistry
     /// <summary>
     /// Returns true if the named connection is currently open and operational.
     /// </summary>
-    /// <param name="connectionName">
-    /// The <see cref="Configuration.RabbitConnectionOptions.Name"/> to check.
-    /// </param>
+    /// <param name="connectionName"></param>
     /// <returns>True if connected, false if disconnected, connecting, or unknown.</returns>
     bool IsConnected(string connectionName);
 

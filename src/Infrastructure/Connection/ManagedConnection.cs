@@ -30,7 +30,6 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// </remarks>
 /// <param name="_name">
 /// The connection name (typically the dictionary key from configuration).
-/// This overrides <see cref="RabbitConnectionOptions.Name"/>.
 /// </param>
 /// <param name="_options">
 /// The configuration options used to establish and maintain the connection.
@@ -59,7 +58,7 @@ internal sealed class ManagedConnection(string _name, RabbitConnectionOptions _o
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
-    /// The connection name from <see cref="RabbitConnectionOptions.Name"/>.
+    /// The connection name/>.
     /// </summary>
     public string Name { get; } = _name;
 
