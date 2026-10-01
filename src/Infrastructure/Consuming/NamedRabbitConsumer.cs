@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
+using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Topology;
 using RabbitFlow.Infrastructure.Versioning;
@@ -138,7 +139,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 if (_options.MaxConcurrentHandlers > 0)
                 {
                     var dispatchConcurrency = (ushort)Math.Min(65535, _options.MaxConcurrentHandlers);
-                    channelOptions = new CreateChannelOptions(
+                  channelOptions = new CreateChannelOptions(
                         publisherConfirmationsEnabled: false,
                         publisherConfirmationTrackingEnabled: false,
                         consumerDispatchConcurrency: dispatchConcurrency);
@@ -174,7 +175,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     shutdownTcs.TrySetResult(true);
                     return Task.CompletedTask;
                 }
-                channel.ChannelShutdownAsync += OnShutdown;
+          channel.ChannelShutdownAsync += OnShutdown;
 
                 var consumerTag = await channel.BasicConsumeAsync(
                     queue: _options.QueueName,
@@ -187,7 +188,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
                 try
                 {
-                    var stoppingTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+  var stoppingTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     using var reg = cancellationToken.Register(() => stoppingTcs.TrySetResult(true));
 
                     await Task.WhenAny(shutdownTcs.Task, stoppingTcs.Task).ConfigureAwait(false);
@@ -195,7 +196,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     if (stoppingTcs.Task.IsCompleted)
                     {
 
-                        _isShuttingDown = true;
+                        _isShuttingDown = true; 
                         await GracefulDrainAsync(channel, consumerTag).ConfigureAwait(false);
                     }
                 }
@@ -288,7 +289,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (ObjectDisposedException) { }
 
-        if (remaining > 0)
+    if (remaining > 0)
         {
             try
             {
@@ -315,7 +316,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
     private async Task OnMessageReceived(IChannel channel, BasicDeliverEventArgs ea)
     {
-        Interlocked.Increment(ref _inFlightCount);
+    Interlocked.Increment(ref _inFlightCount);
         try
         {
             var body = ea.Body;
@@ -479,6 +480,22 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     private async Task HandlePoisonMessageAsync(IChannel channel, BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception ex, int deliveryCount)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType) ?? "<unknown>";
+
+        if (ex is MessageDeserializationException)
+        {
+            _metrics.ConsumeErrors.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagErrorType, nameof(MessageDeserializationException)),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            _logger.LogError(ex, "[Consumer:{Key}] Message deserialization failed for '{EventType}' — routing to DLQ/discard without retry (EnableDeadLetter={EnableDeadLetter}, deliveryTag={Tag})", _consumerKey, eventTypeName, _options.EnableDeadLetter, ea.DeliveryTag);
+
+            await NackAsync(channel, ea.DeliveryTag, requeue: false).ConfigureAwait(false);
+
+            await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            return;
+        }
 
         _metrics.ConsumeErrors.Add(1,
             new(RabbitMqMetrics.TagConsumerKey, _consumerKey),

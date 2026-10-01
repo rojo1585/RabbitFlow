@@ -1,9 +1,11 @@
 ﻿using Microsoft.Extensions.Logging;
 using RabbitFlow.Abstractions;
+using RabbitFlow.Exceptions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace RabbitFlow.Infrastructure.Serialization;
+
 
 /// <summary>
 /// Default message serializer using System.Text.Json.
@@ -58,12 +60,13 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         _options = new JsonSerializerOptions(options)
         {
             PropertyNamingPolicy = options.PropertyNamingPolicy ?? JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = options.DefaultIgnoreCondition == default
-                ? JsonIgnoreCondition.WhenWritingNull
-                : options.DefaultIgnoreCondition,
+            DefaultIgnoreCondition = options.DefaultIgnoreCondition == default ? JsonIgnoreCondition.WhenWritingNull : options.DefaultIgnoreCondition,
         };
         _logger = loggerFactory?.CreateLogger<SystemTextJsonSerializer>();
     }
+
+    /// <inheritdoc/>
+    public string ContentType => "application/json";
 
     /// <inheritdoc/>
     public ReadOnlyMemory<byte> Serialize<T>(T message)
@@ -103,7 +106,7 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             _logger?.LogWarning(ex, "Failed to deserialize message to type {Type}", typeof(T).Name);
-            return default;
+            throw new MessageDeserializationException(typeof(T).Name, ex);
         }
     }
 
@@ -123,7 +126,7 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             _logger?.LogWarning(ex, "Failed to deserialize message to type {Type}", type.Name);
-            return default;
+            throw new MessageDeserializationException(type.Name, ex);
         }
     }
 
@@ -161,8 +164,9 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
             _logger?.LogWarning(ex, "Failed to deserialize message envelope with payload");
-            return null;
+            throw new MessageDeserializationException(typeof(MessageEnvelope).Name, ex);
         }
 
     }
 }
+

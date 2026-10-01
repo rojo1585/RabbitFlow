@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
+using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Topology;
 using RabbitMQ.Client;
@@ -122,7 +123,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
                     return Task.CompletedTask;
                 }
 
-                channel.ChannelShutdownAsync += OnShutdown;
+               channel.ChannelShutdownAsync += OnShutdown;
 
                 var consumerTag = await channel.BasicConsumeAsync(
                     queue: _options.QueueName,
@@ -302,7 +303,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         var events = batch.Select(m => m.Event).ToList();
         var contexts = batch.Select(m => m.Context).ToList();
 
-        var deliveryCount = batch.Max(m => m.Context.RetryCount) + 1;
+      var deliveryCount = batch.Max(m => m.Context.RetryCount) + 1;
 
         using var processActivity = RabbitMqActivitySource.Source.StartActivity($"{firstEventTypeName} process", ActivityKind.Consumer);
 
@@ -518,6 +519,23 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     private async Task HandlePoisonMessageAsync(BasicDeliverEventArgs ea, ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, Exception ex, int deliveryCount)
     {
         var eventTypeName = GetHeaderString(properties, MessageHeaders.EventType) ?? "<unknown>";
+
+        if (ex is MessageDeserializationException)
+        {
+            _metrics.ConsumeErrors.Add(1,
+                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                new(RabbitMqMetrics.TagEventType, eventTypeName),
+                new(RabbitMqMetrics.TagErrorType, nameof(MessageDeserializationException)),
+                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+            _logger.LogError(ex, "[BatchConsumer:{Key}] Message deserialization failed for '{EventType}' — routing to DLQ/discard without retry (EnableDeadLetter={EnableDeadLetter}, deliveryTag={Tag})",
+                _consumerKey, eventTypeName, _options.EnableDeadLetter, ea.DeliveryTag);
+
+            await NackAsync(ea.DeliveryTag, requeue: false).ConfigureAwait(false);
+
+            await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+            return;
+        }
 
         _metrics.ConsumeErrors.Add(1,
             new(RabbitMqMetrics.TagConsumerKey, _consumerKey),

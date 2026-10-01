@@ -133,7 +133,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
         if (_poolingEnabled)
         {
             var channelOptions = options.EnablePublisherConfirms ? ConfirmChannelOptions : null;
-            _channelPool = new ChannelPool(connection, channelOptions, options.ChannelPoolSize, logger, 
+            _channelPool = new ChannelPool(connection, channelOptions, options.ChannelPoolSize, logger,
                                            onChannelCreated: () => _metrics.ChannelPoolCreated.Add(1, new KeyValuePair<string, object?>(RabbitMqMetrics.TagProducerKey, producerKey)));
 
             _logger.LogInformation("[Producer:{Key}] Channel pooling ENABLED (size={PoolSize}, confirms={Confirms})", producerKey, options.ChannelPoolSize, options.EnablePublisherConfirms);
@@ -640,7 +640,7 @@ internal sealed class NamedRabbitPublisher : IAsyncDisposable
 
         var properties = new BasicProperties
         {
-            ContentType = "application/json",
+            ContentType = _serializer.ContentType,
             ContentEncoding = "utf-8",
             DeliveryMode = _options.Persistent ? DeliveryModes.Persistent : DeliveryModes.Transient,
             MessageId = messageId,
