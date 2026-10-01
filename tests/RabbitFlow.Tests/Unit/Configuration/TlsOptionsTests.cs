@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace RabbitFlow.Tests.Unit.Configuration;
+
 public class TlsOptionsTests
 {
     [Fact]
@@ -100,7 +101,6 @@ public class RabbitConnectionOptionsTlsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "test",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"
@@ -113,7 +113,6 @@ public class RabbitConnectionOptionsTlsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "cloud",
             HostName = "b-123.mq.amazonaws.com",
             Port = 5671,
             UserName = "user",

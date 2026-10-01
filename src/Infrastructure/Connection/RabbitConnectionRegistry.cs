@@ -4,6 +4,7 @@ using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 
 namespace RabbitFlow.Infrastructure.Connection;
+
 /// <summary>
 /// Manages multiple named <see cref="ManagedConnection"/> instances.
 /// Implements <see cref="IRabbitConnectionRegistry"/> for health checks and status queries.
@@ -14,7 +15,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// at application startup to begin connecting.
 /// </para>
 /// </summary>
-public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsyncDisposable
+internal sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsyncDisposable
 {
     private readonly Dictionary<string, ManagedConnection> _connections = [];
     private readonly ILogger<RabbitConnectionRegistry> _logger;
@@ -38,7 +39,16 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
         CreateManagedConnections();
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets a managed connection by name. Internal — used by infrastructure
+    /// that needs a concrete <see cref="ManagedConnection"/> (consumers, publishers).
+    /// Throws if the connection name is not registered.
+    /// </summary>
+    /// <param name="connectionName">The connection name.</param>
+    /// <returns>The managed connection.</returns>
+    /// <exception cref="Exceptions.ConnectionNotFoundException">
+    /// Thrown when the connection name is not found.
+    /// </exception>
     public ManagedConnection GetConnection(string connectionName)
     {
         if (_connections.TryGetValue(connectionName, out var conn))
@@ -63,7 +73,11 @@ public sealed class RabbitConnectionRegistry : IRabbitConnectionRegistry, IAsync
         return _connections.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.IsConnected);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Starts all managed connections. Internal — called only by
+    /// <see cref="ConnectionInitializerHostedService"/> at application startup.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown if called more than once.</exception>
     public void StartAll()
     {
         if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)

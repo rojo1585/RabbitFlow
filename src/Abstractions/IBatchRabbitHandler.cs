@@ -33,13 +33,6 @@ namespace RabbitFlow.Abstractions;
 public interface IBatchRabbitHandler<TEvent> where TEvent : class
 {
     /// <summary>
-    /// Identifies which consumer configuration this handler belongs to.
-    /// Must match a <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/>
-    /// defined in the RabbitMQ configuration.
-    /// </summary>
-    string ConsumerKey { get; }
-
-    /// <summary>
     /// Processes a batch of events delivered as a group.
     /// Called within a fresh DI scope that is disposed after this method returns.
     /// 

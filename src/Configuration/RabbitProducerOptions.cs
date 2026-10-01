@@ -7,14 +7,14 @@ public sealed class RabbitProducerOptions
 {
     /// <summary>
     /// Unique identifier for this producer.
-    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, string?, CancellationToken)"/>
-    /// to target a specific producer when multiple exist.
+    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, Abstractions.PublishOptions?, CancellationToken)"/>
+    /// via <see cref="Abstractions.PublishOptions.ProducerKey"/> to target a specific producer
+    /// when multiple exist.
     /// Must be unique across all producers.
     /// </summary>
     public required string ServiceKey { get; init; }
 
     /// <summary>
-    /// References <see cref="RabbitConnectionOptions.Name"/> to determine
     /// which connection this producer uses.
     /// </summary>
     public required string ConnectionName { get; init; }
@@ -123,3 +123,4 @@ public sealed class RabbitProducerOptions
     /// </summary>
     public int ChannelPoolSize { get; init; } = 4;
 }
+

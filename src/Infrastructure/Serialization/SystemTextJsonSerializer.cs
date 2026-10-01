@@ -1,8 +1,11 @@
-﻿using RabbitFlow.Abstractions;
+﻿using Microsoft.Extensions.Logging;
+using RabbitFlow.Abstractions;
+using RabbitFlow.Exceptions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace RabbitFlow.Infrastructure.Serialization;
+
 
 /// <summary>
 /// Default message serializer using System.Text.Json.
@@ -11,24 +14,59 @@ namespace RabbitFlow.Infrastructure.Serialization;
 public sealed class SystemTextJsonSerializer : IMessageSerializer
 {
     private readonly JsonSerializerOptions _options;
+    private readonly ILogger<SystemTextJsonSerializer>? _logger;
 
     /// <summary>
     /// Creates a new serializer with default options (camelCase, ignore null values).
     /// </summary>
-    public SystemTextJsonSerializer() : this(new JsonSerializerOptions()) { }
+    public SystemTextJsonSerializer() : this(new JsonSerializerOptions(), loggerFactory: null) { }
+
+    /// <summary>
+    /// Creates a new serializer with default options (camelCase, ignore null values)
+    /// and an optional logger factory for diagnostics.
+    /// </summary>
+    /// <param name="loggerFactory">
+    /// Optional logger factory used to log deserialization failures.
+    /// Pass <c>null</c> (or use the parameterless constructor) for a silent, no-logging instance.
+    /// </param>
+    public SystemTextJsonSerializer(ILoggerFactory? loggerFactory) : this(new JsonSerializerOptions(), loggerFactory) { }
 
     /// <summary>
     /// Creates a new serializer with custom options.
     /// </summary>
     /// <param name="options">JSON serializer options. PropertyNamingPolicy and
     /// DefaultIgnoreCondition can be customized.</param>
-    public SystemTextJsonSerializer(JsonSerializerOptions options)
+    /// <remarks>
+    /// The supplied <paramref name="options"/> instance is <b>not</b> mutated. A shallow copy is
+    /// created via the <see cref="JsonSerializerOptions"/> copy constructor and the defaults
+    /// (camelCase naming, ignore null values on write) are applied only to the copy. This avoids
+    /// <see cref="InvalidOperationException"/> when the caller reuses an options instance that
+    /// has already been used for serialization (the options are effectively immutable after first use).
+    /// </remarks>
+    public SystemTextJsonSerializer(JsonSerializerOptions options) : this(options, loggerFactory: null) { }
+
+    /// <summary>
+    /// Creates a new serializer with custom options and an optional logger factory for diagnostics.
+    /// </summary>
+    /// <param name="options">JSON serializer options. PropertyNamingPolicy and
+    /// DefaultIgnoreCondition can be customized. The instance is cloned, not mutated.</param>
+    /// <param name="loggerFactory">
+    /// Optional logger factory used to log deserialization failures.
+    /// Pass <c>null</c> for a silent, no-logging instance.
+    /// </param>
+    public SystemTextJsonSerializer(JsonSerializerOptions options, ILoggerFactory? loggerFactory)
     {
-        _options = options;
-        _options.PropertyNamingPolicy ??= JsonNamingPolicy.CamelCase;
-        if (_options.DefaultIgnoreCondition == default)
-            _options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        ArgumentNullException.ThrowIfNull(options);
+        _options = new JsonSerializerOptions(options)
+        {
+            PropertyNamingPolicy = options.PropertyNamingPolicy ?? JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = options.DefaultIgnoreCondition == default ? JsonIgnoreCondition.WhenWritingNull : options.DefaultIgnoreCondition,
+        };
+        _logger = loggerFactory?.CreateLogger<SystemTextJsonSerializer>();
     }
+
+    /// <inheritdoc/>
+    public string ContentType => "application/json";
 
     /// <inheritdoc/>
     public ReadOnlyMemory<byte> Serialize<T>(T message)
@@ -67,7 +105,8 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
-            return default;
+            _logger?.LogWarning(ex, "Failed to deserialize message to type {Type}", typeof(T).Name);
+            throw new MessageDeserializationException(typeof(T).Name, ex);
         }
     }
 
@@ -86,7 +125,8 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
-            return default;
+            _logger?.LogWarning(ex, "Failed to deserialize message to type {Type}", type.Name);
+            throw new MessageDeserializationException(type.Name, ex);
         }
     }
 
@@ -123,7 +163,10 @@ public sealed class SystemTextJsonSerializer : IMessageSerializer
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
         {
-            return null;
+            _logger?.LogWarning(ex, "Failed to deserialize message envelope with payload");
+            throw new MessageDeserializationException(typeof(MessageEnvelope).Name, ex);
         }
+
     }
 }
+

@@ -37,7 +37,7 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// </summary>
 /// <param name="registry">The connection registry.</param>
 /// <param name="settings">The RabbitMQ settings to read connection names from.</param>
-public sealed class RabbitMqAllHealthCheck(IRabbitConnectionRegistry registry, IOptions<RabbitMqSettings> settings) : IHealthCheck
+internal sealed class RabbitMqAllHealthCheck(IRabbitConnectionRegistry registry, IOptions<RabbitMqSettings> settings) : IHealthCheck
 {
     private readonly IRabbitConnectionRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
     private readonly string[] _connectionNames = settings?.Value.Connections.Keys.ToArray() ?? throw new ArgumentNullException(nameof(settings));
@@ -68,3 +68,4 @@ public sealed class RabbitMqAllHealthCheck(IRabbitConnectionRegistry registry, I
         return Task.FromResult(HealthCheckResult.Unhealthy($"{unhealthyCount} of {_connectionNames.Length} RabbitMQ connection(s) are closed.", data: data));
     }
 }
+

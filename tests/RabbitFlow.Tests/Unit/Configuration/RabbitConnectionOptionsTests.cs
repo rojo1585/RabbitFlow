@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 namespace RabbitFlow.Tests.Unit.Configuration;
 
 
+
 public class RabbitConnectionOptionsTests
 {
     [Fact]
@@ -16,7 +17,6 @@ public class RabbitConnectionOptionsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "test",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"
@@ -29,7 +29,6 @@ public class RabbitConnectionOptionsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "test",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"
@@ -42,7 +41,6 @@ public class RabbitConnectionOptionsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "test",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"
@@ -55,7 +53,6 @@ public class RabbitConnectionOptionsTests
     {
         var opts = new RabbitConnectionOptions
         {
-            Name = "test",
             HostName = "localhost",
             UserName = "guest",
             Password = "guest"

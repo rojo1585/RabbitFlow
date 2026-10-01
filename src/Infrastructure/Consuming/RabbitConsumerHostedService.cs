@@ -15,7 +15,7 @@ namespace RabbitFlow.Infrastructure.Consuming;
 /// Supports both individual (<see cref="NamedRabbitConsumer"/>) and batch
 /// (<see cref="NamedBatchRabbitConsumer"/>) consumers based on configuration.
 /// </summary>
-public sealed class RabbitConsumerHostedService(IRabbitConnectionRegistry _connectionRegistry,
+internal sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _connectionRegistry,
                                                 HandlerTypeRegistry _handlerRegistry,
                                                 IMessageSerializer _serializer,
                                                 IServiceScopeFactory _scopeFactory,

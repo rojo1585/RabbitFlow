@@ -42,7 +42,7 @@ namespace RabbitFlow.Infrastructure.HealthChecks;
 /// The connection name as defined in <c>RabbitMqSettings.Connections</c>.
 /// </param>
 /// <param name="_registry">The connection registry to query.</param>
-public sealed class RabbitMqHealthCheck(string _connectionName, IRabbitConnectionRegistry _registry) : IHealthCheck
+internal sealed class RabbitMqHealthCheck(string _connectionName, IRabbitConnectionRegistry _registry) : IHealthCheck
 {
     private readonly string _connectionName = _connectionName ?? throw new ArgumentNullException(nameof(_connectionName));
     private readonly IRabbitConnectionRegistry _registry = _registry ?? throw new ArgumentNullException(nameof(_registry));

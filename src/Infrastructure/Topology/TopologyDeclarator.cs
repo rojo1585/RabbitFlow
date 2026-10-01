@@ -196,11 +196,11 @@ internal static class TopologyDeclarator
         {
             var delay = delays[i];
             var retryQueueName = $"{options.QueueName}.retry.{(int)delay.TotalSeconds}s";
-
+          
             var retryArgs = new Dictionary<string, object?>
             {
-                [RabbitMqArgs.DeadLetterExchange] = options.ExchangeName,
-                [RabbitMqArgs.DeadLetterRoutingKey] = options.RoutingKey,
+                [RabbitMqArgs.DeadLetterExchange] = string.Empty,
+                [RabbitMqArgs.DeadLetterRoutingKey] = options.QueueName,
             };
 
             var ttlMs = delay > TimeSpan.Zero ? (int)delay.TotalMilliseconds : 1;
@@ -214,7 +214,7 @@ internal static class TopologyDeclarator
                 arguments: retryArgs,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            logger.LogInformation("[Consumer:{Key}] Declared retry queue '{RetryQueue}' (TTL={TTL}ms, not bound to DLX)", options.ServiceKey, retryQueueName, ttlMs);
+            logger.LogInformation("[Consumer:{Key}] Declared retry queue '{RetryQueue}' (TTL={TTL}ms, dead-letters directly to main queue '{MainQueue}')", options.ServiceKey, retryQueueName, ttlMs, options.QueueName);
         }
     }
 

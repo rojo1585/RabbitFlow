@@ -23,7 +23,6 @@ public class BatchConsumerTests(RabbitMqFixture fixture)
 
     private class TelemetryBatchHandler : IBatchRabbitHandler<TelemetryEvent>
     {
-        public string ConsumerKey => "telemetry-batch-consumer";
         public static readonly List<IReadOnlyList<TelemetryEvent>> ReceivedBatches = [];
         public static readonly List<TelemetryEvent> AllReceived = [];
 
@@ -93,14 +92,12 @@ public class BatchConsumerTests(RabbitMqFixture fixture)
             {
                 settings.Connections["main"] = new()
                 {
-                    Name = "main",
                     HostName = fixture.HostName,
                     Port = fixture.Port,
                     UserName = fixture.UserName,
                     Password = fixture.Password,
                     RequestedHeartbeatSeconds = 10,
                     ConnectionTimeoutSeconds = 10,
-                    InitialConnectRetryCount = 3,
                     MaxBackoffSeconds = 5
                 };
 

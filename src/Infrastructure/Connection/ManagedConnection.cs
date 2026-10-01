@@ -30,7 +30,6 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// </remarks>
 /// <param name="_name">
 /// The connection name (typically the dictionary key from configuration).
-/// This overrides <see cref="RabbitConnectionOptions.Name"/>.
 /// </param>
 /// <param name="_options">
 /// The configuration options used to establish and maintain the connection.
@@ -38,7 +37,7 @@ namespace RabbitFlow.Infrastructure.Connection;
 /// <param name="_logger">
 /// The logger instance used to output connection events and status updates.
 /// </param>
-public sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
+internal sealed class ManagedConnection(string _name, RabbitConnectionOptions _options, ILogger<ManagedConnection> _logger) : IAsyncDisposable
 {
     private readonly object _lock = new();
     private IConnection? _connection;
@@ -59,7 +58,7 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     /// <summary>
-    /// The connection name from <see cref="RabbitConnectionOptions.Name"/>.
+    /// The connection name/>.
     /// </summary>
     public string Name { get; } = _name;
 
@@ -436,3 +435,4 @@ public sealed class ManagedConnection(string _name, RabbitConnectionOptions _opt
         }
     }
 }
+

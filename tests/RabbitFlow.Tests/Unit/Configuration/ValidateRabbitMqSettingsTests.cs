@@ -18,7 +18,6 @@ public class ValidateRabbitMqSettingsTests
         {
             ["main"] = new()
             {
-                Name = "main",
                 HostName = "localhost",
                 UserName = "guest",
                 Password = "guest"
@@ -205,7 +204,6 @@ public class ValidateRabbitMqSettingsTests
             {
                 ["main"] = new()
                 {
-                    Name = "main",
                     HostName = "localhost",
                     UserName = "guest",
                     Password = "guest"
@@ -392,13 +390,11 @@ public class ValidateRabbitMqSettingsTests
         int? port = null,
         int? requestedHeartbeatSeconds = null,
         int? connectionTimeoutSeconds = null,
-        int? initialConnectRetryCount = null,
         int? maxBackoffSeconds = null,
         string? hostName = null)
     {
         return new RabbitConnectionOptions
         {
-            Name = o.Name,
             HostName = hostName ?? o.HostName,
             UserName = o.UserName,
             Password = o.Password,
@@ -406,7 +402,6 @@ public class ValidateRabbitMqSettingsTests
             Port = port ?? o.Port,
             RequestedHeartbeatSeconds = requestedHeartbeatSeconds ?? o.RequestedHeartbeatSeconds,
             ConnectionTimeoutSeconds = connectionTimeoutSeconds ?? o.ConnectionTimeoutSeconds,
-            InitialConnectRetryCount = initialConnectRetryCount ?? o.InitialConnectRetryCount,
             MaxBackoffSeconds = maxBackoffSeconds ?? o.MaxBackoffSeconds,
             Tls = o.Tls
         };
@@ -470,18 +465,6 @@ public class ValidateRabbitMqSettingsTests
 
         result.Failed.Should().BeTrue();
         result.FailureMessage.Should().Contain("MaxBackoffSeconds must be >= 1");
-    }
-
-    [Fact]
-    public void Validate_ConnectionInitialConnectRetryNegative_Fails()
-    {
-        var settings = ValidSettings();
-        settings.Connections["main"] = CloneConnection(settings.Connections["main"], initialConnectRetryCount: -1);
-
-        var result = _validator.Validate(Options.DefaultName, settings);
-
-        result.Failed.Should().BeTrue();
-        result.FailureMessage.Should().Contain("InitialConnectRetryCount must be >= 0");
     }
 
     [Fact]

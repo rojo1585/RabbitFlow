@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using RabbitFlow.Exceptions;
 
 namespace RabbitFlow.Abstractions;
 
@@ -11,28 +9,26 @@ namespace RabbitFlow.Abstractions;
 public interface IBatchEventPublisher
 {
     /// <summary>
-    /// Publishes a batch of events using the default producer.
-    /// Throws <see cref="InvalidOperationException"/> when multiple producers are registered.
+    /// Publishes a batch of events to RabbitMQ.
     /// </summary>
     /// <typeparam name="TEvent">The event type. Must be a reference type.</typeparam>
     /// <param name="events">The collection of events to publish.</param>
-    /// <param name="routingKey">
-    /// Optional routing key override. If null, uses the producer's default.
+    /// <param name="options">
+    /// Optional publish settings:
+    /// <list type="bullet">
+    ///   <item><see cref="PublishOptions.ProducerKey"/> — target a specific producer (required when multiple are registered).</item>
+    ///   <item><see cref="PublishOptions.RoutingKey"/> — override the producer's default routing key.</item>
+    /// </list>
+    /// If null, uses the default producer with the default routing key.
+    /// <see cref="PublishOptions.CorrelationId"/> is ignored for batch publishes (each message
+    /// gets its own auto-generated correlation ID at the channel level).
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class;
-
-    /// <summary>
-    /// Publishes a batch of events using a specific producer.
-    /// </summary>
-    /// <typeparam name="TEvent">The event type. Must be a reference type.</typeparam>
-    /// <param name="producerKey">
-    /// The <see cref="Configuration.RabbitProducerOptions.ServiceKey"/> of the target producer.
-    /// </param>
-    /// <param name="events">The collection of events to publish.</param>
-    /// <param name="routingKey">
-    /// Optional routing key override. If null, uses the producer's default.
-    /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task PublishBatchAsync<TEvent>(string producerKey, IEnumerable<TEvent> events, string? routingKey = null, CancellationToken cancellationToken = default) where TEvent : class;
+    /// <exception cref="AmbiguousProducerException">
+    /// Thrown when <see cref="PublishOptions.ProducerKey"/> is null and zero or multiple producers are registered.
+    /// </exception>
+    /// <exception cref="ProducerNotFoundException">
+    /// Thrown when <see cref="PublishOptions.ProducerKey"/> references an unknown producer.
+    /// </exception>
+    Task PublishBatchAsync<TEvent>(IEnumerable<TEvent> events, PublishOptions? options = null, CancellationToken cancellationToken = default) where TEvent : class;
 }

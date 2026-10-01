@@ -14,9 +14,6 @@ using System.Threading.Tasks;
 
 namespace RabbitFlow.Tests.Unit.Extensions;
 
-
-
-
 public class ServiceCollectionExtensionsTests
 {
     [Fact]
@@ -105,7 +102,6 @@ public class ServiceCollectionExtensionsTests
         {
             settings.Connections["main"] = new RabbitConnectionOptions
             {
-                Name = "main",
                 HostName = "localhost",
                 UserName = "guest",
                 Password = "guest"
@@ -134,7 +130,6 @@ public class ServiceCollectionExtensionsTests
             {
                 settings.Connections["main"] = new RabbitConnectionOptions
                 {
-                    Name = "main",
                     HostName = "localhost",
                     UserName = "guest",
                     Password = "guest"
@@ -198,7 +193,6 @@ public class ServiceCollectionExtensionsTests
         {
             settings.Connections["other"] = new RabbitConnectionOptions
             {
-                Name = "other",
                 HostName = "other-host",
                 UserName = "guest",
                 Password = "guest"
@@ -217,7 +211,6 @@ public class ServiceCollectionExtensionsTests
         {
             settings.Connections["main"] = new RabbitConnectionOptions
             {
-                Name = "main",
                 HostName = "localhost",
                 UserName = "guest",
                 Password = "guest"
@@ -228,7 +221,6 @@ public class ServiceCollectionExtensionsTests
         {
             settings.Connections["other"] = new RabbitConnectionOptions
             {
-                Name = "other",
                 HostName = "other-host",
                 UserName = "guest",
                 Password = "guest"
@@ -271,7 +263,6 @@ public class ServiceCollectionExtensionsTests
             // First broker
             settings.Connections["main"] = new RabbitConnectionOptions
             {
-                Name = "main",
                 HostName = "broker1.example.com",
                 UserName = "guest",
                 Password = "guest"
@@ -279,7 +270,6 @@ public class ServiceCollectionExtensionsTests
             // Second broker 
             settings.Connections["secondary"] = new RabbitConnectionOptions
             {
-                Name = "secondary",
                 HostName = "broker2.example.com",
                 UserName = "guest",
                 Password = "guest"
@@ -314,7 +304,6 @@ public class ServiceCollectionExtensionsTests
             "RabbitMQ": {
                 "Connections": {
                     "main": {
-                        "Name": "main",
                         "HostName": "localhost",
                         "UserName": "guest",
                         "Password": "guest"

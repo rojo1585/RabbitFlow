@@ -1,10 +1,12 @@
 ﻿using FluentAssertions;
 using RabbitFlow.Abstractions;
+using RabbitFlow.Exceptions;
 using RabbitFlow.Infrastructure.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace RabbitFlow.Tests.Unit.Zerialization;
@@ -95,19 +97,21 @@ public class SystemTextJsonSerializerTests
     }
 
     [Fact]
-    public void Deserialize_InvalidJson_ReturnsNull()
+    public void Deserialize_InvalidJson_ThrowsMessageDeserializationException()
     {
         var badBytes = Encoding.UTF8.GetBytes("not json");
-        var result = _serializer.Deserialize<TestEvent>(badBytes);
-        result.Should().BeNull();
+        var act = () => _serializer.Deserialize<TestEvent>(badBytes);
+        act.Should().Throw<MessageDeserializationException>()
+           .WithInnerException<JsonException>();
     }
 
     [Fact]
-    public void Deserialize_WithRuntimeType_InvalidJson_ReturnsNull()
+    public void Deserialize_WithRuntimeType_InvalidJson_ThrowsMessageDeserializationException()
     {
         var badBytes = Encoding.UTF8.GetBytes("not json");
-        var result = _serializer.Deserialize(badBytes, typeof(TestEvent));
-        result.Should().BeNull();
+        var act = () => _serializer.Deserialize(badBytes, typeof(TestEvent));
+        act.Should().Throw<MessageDeserializationException>()
+           .WithInnerException<JsonException>();
     }
 
     [Fact]
