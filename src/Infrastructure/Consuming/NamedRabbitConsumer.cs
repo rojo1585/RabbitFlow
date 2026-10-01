@@ -16,7 +16,6 @@ using System.Text;
 
 namespace RabbitFlow.Infrastructure.Consuming;
 
-
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them to
 /// registered <see cref="IRabbitHandler{T}"/> implementations.
@@ -444,7 +443,11 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
             }
             finally
             {
-                _concurrencyLimiter.Release();
+                try
+                {
+                    _concurrencyLimiter.Release();
+                }
+                catch (ObjectDisposedException) { }
             }
         }
         else
@@ -555,21 +558,44 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         try
         {
             var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
-            await invoker(handler, @event, context, cancellationToken)
-                .ConfigureAwait(false);
+            var handlerTask = invoker(handler, @event, context, cancellationToken);
 
-            await AckAsync(channel, deliveryTag)
-                .ConfigureAwait(false);
+            var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = _shutdownCts.Token.Register(() => shutdownTcs.TrySetResult(true));
 
-            _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
-                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                new(RabbitMqMetrics.TagEventType, eventTypeName),
-                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+            var winner = await Task.WhenAny(handlerTask, shutdownTcs.Task).ConfigureAwait(false);
 
-            _metrics.Consumed.Add(1,
-                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                new(RabbitMqMetrics.TagEventType, eventTypeName),
-                new(RabbitMqMetrics.TagQueue, _options.QueueName));
+            if (winner == handlerTask)
+            {
+
+                await handlerTask.ConfigureAwait(false);
+
+                await AckAsync(channel, deliveryTag)
+                    .ConfigureAwait(false);
+
+                _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+                _metrics.Consumed.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName));
+            }
+            else
+            {
+                _logger.LogWarning("[Consumer:{Key}] Handler '{HandlerType}' did not complete within {Timeout}s during shutdown — NACK with requeue (deliveryTag={Tag}). The handler may still be running in the background.",
+                    _consumerKey, handlerType.Name, _options.ShutdownDrainTimeout.TotalSeconds, deliveryTag);
+
+                await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+
+                _metrics.ConsumeErrors.Add(1,
+                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                    new(RabbitMqMetrics.TagEventType, eventTypeName),
+                    new(RabbitMqMetrics.TagErrorType, "ShutdownHandlerTimeout"),
+                    new(RabbitMqMetrics.TagQueue, _options.QueueName));
+            }
         }
         catch (Exception ex)
         {
