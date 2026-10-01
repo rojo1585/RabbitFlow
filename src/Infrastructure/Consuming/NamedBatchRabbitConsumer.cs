@@ -53,7 +53,7 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     private readonly ILogger<NamedBatchRabbitConsumer> _logger;
     private readonly RabbitMqMetrics _metrics;
     private readonly RetryPolicy? _retryPolicy;
-
+    private readonly RetryQueuePublisher? _retryPublisher;
     private volatile IChannel? _currentChannel;
     private volatile bool _disposed;
 
@@ -79,7 +79,10 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         _metrics = metrics;
 
         if (options.EnableRetry)
+        {
             _retryPolicy = new RetryPolicy(options);
+            _retryPublisher = new RetryQueuePublisher(consumerKey, options.QueueName, connection, maxConcurrency: 1, logger);
+        }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -671,47 +674,19 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
     /// <summary>
     /// Publishes a message to the retry queue that corresponds to the given delay.
     /// Uses the default AMQP exchange (empty string) with the retry queue name as
-    /// routing key. The retry queue has a TTL and x-dead-letter-exchange pointing
-    /// back to the main exchange, so the message is re-delivered to the main queue
-    /// after the TTL expires.
+    /// routing key. The retry queue has a TTL and dead-letters (via the default exchange)
+    /// straight back to the main queue, so the message is re-delivered after the TTL expires.
+    /// The publish is confirmed by the broker (see <see cref="RetryQueuePublisher"/>), so the
+    /// caller may safely ACK the original on <c>true</c>.
     /// </summary>
-    /// <returns><c>true</c> if the publish succeeded; <c>false</c> if the broker or channel was unavailable.</returns>
-    private async Task<bool> PublishToRetryQueueAsync(ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, TimeSpan delay)
+    /// <returns><c>true</c> if the broker confirmed the publish; <c>false</c> otherwise (the caller must NACK with requeue).</returns>
+    private Task<bool> PublishToRetryQueueAsync(ReadOnlyMemory<byte> body, IReadOnlyBasicProperties properties, TimeSpan delay)
     {
-        var retryQueueName = $"{_options.QueueName}.retry.{(int)delay.TotalSeconds}s";
+        var props = ToBasicProperties(properties);
+        props.Headers ??= new Dictionary<string, object?>();
+        props.Headers[MessageHeaders.DeliveryCount] = (ExtractRetryCount(properties) + 1).ToString();
 
-        IChannel? retryChannel = null;
-        try
-        {
-            retryChannel = await _connection.CreateChannelAsync().ConfigureAwait(false);
-
-            var props = ToBasicProperties(properties);
-            var currentRetryCount = ExtractRetryCount(properties);
-            var newRetryCount = currentRetryCount + 1;
-            props.Headers ??= new Dictionary<string, object?>();
-            props.Headers[MessageHeaders.DeliveryCount] = newRetryCount.ToString();
-
-            await retryChannel.BasicPublishAsync(
-                exchange: string.Empty,
-                routingKey: retryQueueName,
-                mandatory: false,
-                basicProperties: props,
-                body: body).ConfigureAwait(false);
-
-            _logger.LogInformation("[BatchConsumer:{Key}] Published to retry queue '{RetryQueue}' (delay={DelayMs}ms)", _consumerKey, retryQueueName, (int)delay.TotalMilliseconds);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[BatchConsumer:{Key}] Failed to publish to retry queue '{RetryQueue}'", _consumerKey, retryQueueName);
-            return false;
-        }
-        finally
-        {
-            if (retryChannel is not null)
-                await SafeCloseChannelAsync(retryChannel)
-                    .ConfigureAwait(false);
-        }
+        return _retryPublisher!.PublishAsync(body, props, delay);
     }
 
     /// <summary>
@@ -1000,10 +975,12 @@ internal sealed class NamedBatchRabbitConsumer : IAsyncDisposable
         catch { }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        if (_disposed) return default;
+        if (_disposed) return;
         _disposed = true;
-        return default;
+
+        if (_retryPublisher is not null)
+            await _retryPublisher.DisposeAsync().ConfigureAwait(false);
     }
 }

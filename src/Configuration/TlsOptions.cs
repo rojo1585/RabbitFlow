@@ -93,23 +93,45 @@ public sealed class TlsOptions
     public SslProtocols Protocol { get; init; } = SslProtocols.None;
 
     /// <summary>
-    /// Whether to accept server certificates from unknown issuers (self-signed certs).
-    /// Defaults to false for security.
+    /// Path to a CA certificate (PEM or DER) or PEM bundle used as the ONLY trusted root(s)
+    /// when validating the broker's certificate. Use this for brokers whose certificates are
+    /// issued by a private/corporate CA that is not in the OS trust store.
     /// </summary>
     /// <remarks>
-    /// <b>WARNING:</b> Only enable this in development/staging environments.
-    /// Never enable in production — it defeats server certificate validation
-    /// and exposes the connection to man-in-the-middle attacks.
+    /// Hostname verification, expiry, signature and revocation (unless
+    /// <see cref="DisableCertificateRevocationCheck"/>) are still enforced. This is the
+    /// production-safe alternative to <see cref="AllowUnknownCAs"/>.
+    /// </remarks>
+    public string? CaCertificatePath { get; init; }
+
+    /// <summary>
+    /// Whether to accept server certificates whose chain ends in an untrusted root
+    /// (e.g. self-signed certificates). Defaults to false for security.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only an untrusted root is tolerated: hostname mismatches and expired, not-yet-valid,
+    /// revoked or badly signed certificates are still rejected. Ignored when
+    /// <see cref="CaCertificatePath"/> is set.
+    /// </para>
+    /// <para>
+    /// <b>WARNING:</b> Only enable this in development/staging environments. It accepts any
+    /// self-signed certificate for the expected hostname and therefore exposes the connection
+    /// to man-in-the-middle attacks. In production use <see cref="CaCertificatePath"/>.
+    /// Self-signed certificates usually have no revocation endpoint, so this typically also
+    /// requires <see cref="DisableCertificateRevocationCheck"/> = true.
+    /// </para>
     /// </remarks>
     public bool AllowUnknownCAs { get; init; }
 
     /// <summary>
-    /// Whether to disable certificate revocation check (CRL / OCSP).
+    /// Whether to disable certificate revocation checks (CRL / OCSP).
     /// Defaults to false (revocation checks are performed).
     /// </summary>
     /// <remarks>
-    /// Some environments (air-gapped networks, brokers with self-signed certs)
-    /// may require% require this to be true if CRL endpoints are unreachable.
+    /// Some environments (air-gapped networks, private CAs without CRL/OCSP endpoints,
+    /// self-signed certificates) require this to be true, otherwise the TLS handshake fails
+    /// because the revocation status cannot be determined.
     /// </remarks>
     public bool DisableCertificateRevocationCheck { get; init; }
 }
