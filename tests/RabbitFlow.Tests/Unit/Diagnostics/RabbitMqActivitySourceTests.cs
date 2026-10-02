@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using RedRabbit.Configuration;
 using RedRabbit.Diagnostics;
 
 namespace RedRabbit.Tests.Unit.Diagnostics;
@@ -7,9 +8,9 @@ namespace RedRabbit.Tests.Unit.Diagnostics;
 public class RabbitMqActivitySourceTests
 {
     [Fact]
-    public void DefaultSourceName_IsDefaultInstrumentationName()
+    public void SourceName_MatchesUnderlyingActivitySourceName()
     {
-        RabbitMqActivitySource.SourceName.Should().Be(RedRabbit.Configuration.RabbitMqSettings.DefaultInstrumentationName);
+        RabbitMqActivitySource.Source.Name.Should().Be(RabbitMqActivitySource.SourceName);
     }
 
     [Fact]

@@ -549,4 +549,22 @@ public class ValidateRabbitMqSettingsTests
 
         result.Succeeded.Should().BeTrue();
     }
+    [Fact]
+    public void Validate_TlsCaCertificatePathMissing_Fails()
+    {
+        var settings = ValidSettings();
+        var main = settings.Connections["main"];
+        settings.Connections["main"] = new RabbitConnectionOptions
+        {
+            HostName = main.HostName,
+            UserName = main.UserName,
+            Password = main.Password,
+            Tls = new TlsOptions { Enabled = true, CaCertificatePath = "/does/not/exist/ca.pem" }
+        };
+
+        var result = _validator.Validate(Options.DefaultName, settings);
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("Tls.CaCertificatePath");
+    }
 }
