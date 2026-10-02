@@ -6,3 +6,9 @@
 /tests/RabbitFlow.Tests/bin/Debug/net8.0
 /tests/RabbitFlow.Tests/obj
 /obj
+
+# Build output (any configuration)
+[Bb]in/
+[Oo]bj/
+# Local pack output
+/artifacts/
