@@ -1,9 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 /// <summary>
 /// Manages multiple named <see cref="ManagedConnection"/> instances.

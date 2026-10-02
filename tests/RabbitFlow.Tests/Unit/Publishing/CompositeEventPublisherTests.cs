@@ -2,12 +2,12 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
-using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
-using RabbitFlow.Infrastructure.Connection;
 using RabbitFlow.Infrastructure.Publishing;
+using RedRabbit.Abstractions;
+using RedRabbit.Diagnostics;
+using RedRabbit.Exceptions;
+using RedRabbit.Infrastructure.Connection;
 
 
 namespace RabbitFlow.Tests.Unit.Publishing;

@@ -1,8 +1,9 @@
-﻿using System;
+﻿using RedRabbit.Configuration;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Abstractions
+namespace RedRabbit.Abstractions
 {
     /// <summary>
     /// Processes messages that have exhausted all retry attempts and been
@@ -18,7 +19,7 @@ namespace RabbitFlow.Abstractions
     {
         /// <summary>
         /// Identifies which consumer's DLQ this handler processes.
-        /// Must match a <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/>.
+        /// Must match a <see cref="RabbitConsumerOptions.ServiceKey"/>.
         /// </summary>
         string ConsumerKey { get; }
 

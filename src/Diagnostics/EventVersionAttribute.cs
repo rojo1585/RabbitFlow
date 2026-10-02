@@ -1,4 +1,4 @@
-﻿namespace RabbitFlow.Diagnostics;
+﻿namespace RedRabbit.Diagnostics;
 
 
 

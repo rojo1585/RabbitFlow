@@ -1,5 +1,4 @@
-﻿
-namespace RabbitFlow.Configuration;
+﻿namespace RedRabbit.Configuration;
 
 /// <summary>
 /// Flexible configuration for the dead-letter exchange (DLX), dead-letter queue (DLQ),

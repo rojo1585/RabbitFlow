@@ -1,21 +1,21 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
-using RabbitFlow.Infrastructure.Connection;
-using RabbitFlow.Infrastructure.Topology;
-using RabbitFlow.Infrastructure.Versioning;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Exceptions;
+using RedRabbit.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Topology;
+using RedRabbit.Infrastructure.Versioning;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.Consuming;
+namespace RedRabbit.Infrastructure.Consuming;
 
 /// <summary>
 /// Consumes messages from a single RabbitMQ queue and dispatches them to

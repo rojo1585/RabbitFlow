@@ -1,8 +1,9 @@
-﻿using System;
+﻿using RedRabbit.Configuration;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Abstractions;
+namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Contract for handling a batch of events of the same type from a specific consumer.
@@ -16,8 +17,8 @@ namespace RabbitFlow.Abstractions;
 /// <para>
 /// The consumer buffers incoming messages until either:
 /// <list type="bullet">
-///   <item>The batch size reaches <see cref="Configuration.RabbitConsumerOptions.BatchSize"/>.</item>
-///   <item>The batch timeout <see cref="Configuration.RabbitConsumerOptions.BatchTimeoutMs"/> expires.</item>
+///   <item>The batch size reaches <see cref="RabbitConsumerOptions.BatchSize"/>.</item>
+///   <item>The batch timeout <see cref="RabbitConsumerOptions.BatchTimeoutMs"/> expires.</item>
 /// </list>
 /// </para>
 /// 
@@ -43,7 +44,7 @@ public interface IBatchRabbitHandler<TEvent> where TEvent : class
     /// </summary>
     /// <param name="events">
     /// The list of deserialized event instances. Guaranteed to have at least one element
-    /// and at most <see cref="Configuration.RabbitConsumerOptions.BatchSize"/> elements.
+    /// and at most <see cref="RabbitConsumerOptions.BatchSize"/> elements.
     /// </param>
     /// <param name="contexts">
     /// Context for each event, in the same order as <paramref name="events"/>.

@@ -37,7 +37,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\..\src\RabbitFlow.csproj" />
+		<ProjectReference Include="..\..\src\RedRabbit.csproj" />
 	</ItemGroup>
 
 </Project>

@@ -1,5 +1,5 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Configuration;
+using RedRabbit.Configuration;
 
 namespace RabbitFlow.Tests.Unit.Configuration;
 

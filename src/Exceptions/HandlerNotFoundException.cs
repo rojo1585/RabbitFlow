@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Exceptions
+namespace RedRabbit.Exceptions
 {
     /// <summary>
     /// Thrown internally when no handler is found for a consumed message.

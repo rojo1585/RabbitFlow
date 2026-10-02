@@ -1,8 +1,8 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
-using RabbitFlow.Infrastructure.Versioning;
+using RedRabbit.Exceptions;
+using RedRabbit.Infrastructure.Versioning;
 using System;
 using System.Collections.Generic;
 using System.Linq;

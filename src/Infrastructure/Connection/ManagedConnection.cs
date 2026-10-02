@@ -1,10 +1,10 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Configuration;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 /// <summary>
 /// Manages a single named RabbitMQ connection with automatic reconnection

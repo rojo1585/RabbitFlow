@@ -1,10 +1,10 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
 using RabbitFlow.Diagnostics;
-using RabbitFlow.Extensions;
+using RedRabbit.Abstractions;
+using RedRabbit.Extensions;
 
 namespace RabbitFlow.Tests.Integration;
 

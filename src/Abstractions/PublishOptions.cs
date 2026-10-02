@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RabbitFlow.Abstractions;
+namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Optional settings for a publish operation. Pass to <see cref="IEventPublisher.PublishAsync{TEvent}"/>

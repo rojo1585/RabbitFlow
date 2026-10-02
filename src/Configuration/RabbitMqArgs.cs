@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RabbitFlow.Configuration;
+namespace RedRabbit.Configuration;
 
 /// <summary>
 /// Well-known RabbitMQ argument keys and values for use in

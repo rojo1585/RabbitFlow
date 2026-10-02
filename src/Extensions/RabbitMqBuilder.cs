@@ -3,17 +3,17 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Infrastructure.Connection;
-using RabbitFlow.Infrastructure.Consuming;
-using RabbitFlow.Infrastructure.Publishing;
-using RabbitFlow.Infrastructure.Serialization;
-using RabbitFlow.Infrastructure.Versioning;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Consuming;
+using RedRabbit.Infrastructure.Publishing;
+using RedRabbit.Infrastructure.Serialization;
+using RedRabbit.Infrastructure.Versioning;
 using System.Text.Json;
 
-namespace RabbitFlow.Extensions;
+namespace RedRabbit.Extensions;
 /// <summary>
 /// Fluent builder for configuring RabbitMQ services.
 /// Obtained via <c>services.AddRabbitMQ(...)</c>.

@@ -1,4 +1,4 @@
-﻿using RabbitFlow.Configuration;
+﻿using RedRabbit.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,7 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 /// <summary>
 /// Server certificate validation for TLS connections, driven by <see cref="TlsOptions"/>.

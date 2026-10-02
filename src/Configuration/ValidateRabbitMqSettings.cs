@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
-using RabbitFlow.Exceptions;
+using RedRabbit.Exceptions;
 
 
-namespace RabbitFlow.Configuration;
+namespace RedRabbit.Configuration;
 
 /// <summary>
 /// Validates <see cref="RabbitMqSettings"/> using the idiomatic

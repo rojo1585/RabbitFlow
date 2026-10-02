@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Security.Authentication;
 using System.Text;
 
-namespace RabbitFlow.Configuration;
+namespace RedRabbit.Configuration;
 
 /// <summary>
 /// TLS/SSL configuration for a RabbitMQ connection.

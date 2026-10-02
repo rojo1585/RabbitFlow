@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using global::RabbitFlow.Configuration;
 using global::RabbitFlow.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Connection;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;

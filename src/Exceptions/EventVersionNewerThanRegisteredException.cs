@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RabbitFlow.Exceptions;
+namespace RedRabbit.Exceptions;
 
 /// <summary>
 /// Thrown when a consumed message carries an event version newer than the highest

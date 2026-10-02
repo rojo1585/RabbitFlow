@@ -1,10 +1,10 @@
-﻿using RabbitFlow.Abstractions;
-using RabbitMQ.Client;
+﻿using RabbitMQ.Client;
+using RedRabbit.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.Consuming
+namespace RedRabbit.Infrastructure.Consuming
 {/// <summary>
 /// Represents a single buffered message awaiting batch dispatch.
 /// </summary>

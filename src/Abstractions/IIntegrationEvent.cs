@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Abstractions
+namespace RedRabbit.Abstractions
 {
     /// <summary>
     /// Marker interface for integration events published through RabbitMQ.

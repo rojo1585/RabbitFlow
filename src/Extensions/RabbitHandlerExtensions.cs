@@ -1,13 +1,14 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Infrastructure.Consuming;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Infrastructure.Consuming;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
 
-namespace RabbitFlow.Extensions
+namespace RedRabbit.Extensions
 {
 
     /// <summary>
@@ -22,7 +23,7 @@ namespace RabbitFlow.Extensions
         /// </summary>
         /// <param name="services">The service collection.</param>
         /// <param name="consumerKey">
-        /// Must match a <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/>.
+        /// Must match a <see cref="RabbitConsumerOptions.ServiceKey"/>.
         /// </param>
         /// <typeparam name="THandler">
         /// The handler type implementing <see cref="IRabbitHandler{TEvent}"/>.
@@ -59,8 +60,8 @@ namespace RabbitFlow.Extensions
         /// </summary>
         /// <param name="services">The service collection.</param>
         /// <param name="consumerKey">
-        /// Must match a <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/> with
-        /// <see cref="Configuration.RabbitConsumerOptions.EnableBatchConsumer"/> set to true.
+        /// Must match a <see cref="RabbitConsumerOptions.ServiceKey"/> with
+        /// <see cref="RabbitConsumerOptions.EnableBatchConsumer"/> set to true.
         /// </param>
         /// <typeparam name="THandler">
         /// The handler type implementing <see cref="IBatchRabbitHandler{TEvent}"/>.

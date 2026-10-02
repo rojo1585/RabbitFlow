@@ -1,4 +1,6 @@
-﻿namespace RabbitFlow.Configuration;
+﻿using RedRabbit.Abstractions;
+
+namespace RedRabbit.Configuration;
 /// <summary>
 /// Defines a message producer bound to a specific exchange and connection.
 /// The <see cref="ServiceKey"/> is used to route publish calls to the correct producer.
@@ -7,8 +9,8 @@ public sealed class RabbitProducerOptions
 {
     /// <summary>
     /// Unique identifier for this producer.
-    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, Abstractions.PublishOptions?, CancellationToken)"/>
-    /// via <see cref="Abstractions.PublishOptions.ProducerKey"/> to target a specific producer
+    /// Used in <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, RedRabbit.Abstractions.PublishOptions?, CancellationToken)"/>
+    /// via <see cref="PublishOptions.ProducerKey"/> to target a specific producer
     /// when multiple exist.
     /// Must be unique across all producers.
     /// </summary>

@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 
 /// <summary>

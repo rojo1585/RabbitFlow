@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.Options;
 using RabbitFlow.Configuration;
+using RedRabbit.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Linq;

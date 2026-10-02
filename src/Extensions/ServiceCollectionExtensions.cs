@@ -1,11 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Configuration;
+using RedRabbit.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Extensions;
+namespace RedRabbit.Extensions;
 
 /// <summary>
 /// Extension methods for registering RabbitMQ services.

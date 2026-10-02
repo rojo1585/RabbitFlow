@@ -1,14 +1,14 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Infrastructure.Connection;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
+using RedRabbit.Infrastructure.Connection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RabbitFlow.Infrastructure.Consuming;
+namespace RedRabbit.Infrastructure.Consuming;
 /// <summary>
 /// Publishes failed messages to the consumer's delay retry queues
 /// (<c>{QueueName}.retry.{N}s</c>) with broker-side guarantees.

@@ -2,8 +2,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Configuration;
-using RabbitFlow.Extensions;
+using RedRabbit.Configuration;
+using RedRabbit.Extensions;
 
 namespace RabbitFlow.Tests.Integration;
 

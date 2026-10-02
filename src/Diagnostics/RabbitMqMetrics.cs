@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Text;
 
-namespace RabbitFlow.Diagnostics;
+namespace RedRabbit.Diagnostics;
 
 
 /// <summary>

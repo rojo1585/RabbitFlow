@@ -1,10 +1,10 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
-using RabbitFlow.Abstractions;
+using RedRabbit.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.HealthChecks;
+namespace RedRabbit.Infrastructure.HealthChecks;
 
 /// <summary>
 /// Reports the health of a single named RabbitMQ connection.

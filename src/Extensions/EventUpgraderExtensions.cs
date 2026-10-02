@@ -1,14 +1,14 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Infrastructure.Versioning;
+using RedRabbit.Abstractions;
+using RedRabbit.Diagnostics;
+using RedRabbit.Infrastructure.Versioning;
 using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 
-namespace RabbitFlow.Extensions
+namespace RedRabbit.Extensions
 {
 
     /// <summary>

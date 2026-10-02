@@ -2,7 +2,7 @@
 using RabbitMQ.Client;
 using System.Collections.Concurrent;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 /// <summary>
 /// A pool of reusable AMQP channels that eliminates the per-publish channel

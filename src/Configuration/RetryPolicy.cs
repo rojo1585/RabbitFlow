@@ -1,4 +1,4 @@
-﻿namespace RabbitFlow.Configuration;
+﻿namespace RedRabbit.Configuration;
 
 
 

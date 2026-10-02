@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Infrastructure.Consuming;
+namespace RedRabbit.Infrastructure.Consuming;
 
 
 /// <summary>

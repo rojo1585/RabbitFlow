@@ -1,11 +1,11 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Abstractions;
 using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Extensions;
-using RabbitFlow.Infrastructure.Serialization;
+using RedRabbit.Abstractions;
+using RedRabbit.Diagnostics;
+using RedRabbit.Extensions;
+using RedRabbit.Infrastructure.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;

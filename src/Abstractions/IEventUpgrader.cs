@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitFlow.Abstractions
+namespace RedRabbit.Abstractions
 {
     /// <summary>
     /// Transforms an event from an older schema version to a newer one.
