@@ -7,7 +7,6 @@
 		<LangVersion>latest</LangVersion>
 		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
-		<PackageReadmeFile>README.md</PackageReadmeFile>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -40,7 +39,9 @@
 	  <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
 	  <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
 	</ItemGroup>
-	
+	<ItemGroup>
+		<None Include="..\README.md" Pack="true" PackagePath="\" Visible="false" />
+	</ItemGroup>
 	<ItemGroup>
 		<InternalsVisibleTo Include="RedRabbit.Tests" />
 	</ItemGroup>
