@@ -1,9 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Configuration;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Infrastructure.Topology;
+namespace RedRabbit.Infrastructure.Topology;
 
 /// <summary>
 /// Declares AMQP topology (exchanges, queues, bindings, DLX, retry queues)

@@ -2,11 +2,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Extensions;
-namespace RabbitFlow.Tests.Integration;
+using RedRabbit.Abstractions;
+using RedRabbit.Diagnostics;
+using RedRabbit.Extensions;
+namespace RedRabbit.Tests.Integration;
 
 [Collection(RabbitMqCollection.Name)]
 public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)

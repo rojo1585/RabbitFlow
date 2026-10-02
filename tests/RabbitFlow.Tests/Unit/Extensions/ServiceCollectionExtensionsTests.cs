@@ -1,18 +1,13 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Extensions;
-using RabbitFlow.Infrastructure.Serialization;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Extensions;
+using RedRabbit.Infrastructure.Serialization;
 
-namespace RabbitFlow.Tests.Unit.Extensions;
+namespace RedRabbit.Tests.Unit.Extensions;
 
 public class ServiceCollectionExtensionsTests
 {

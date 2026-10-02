@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Exceptions;
+using RedRabbit.Abstractions;
+using RedRabbit.Exceptions;
 
-namespace RabbitFlow.Infrastructure.Versioning;
+namespace RedRabbit.Infrastructure.Versioning;
 /// <summary>
 /// Describes a registered upgrader: from version, to version, upgrader type, and the compiled upgrade function.
 /// </summary>

@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace RabbitFlow.Configuration;
+﻿namespace RedRabbit.Configuration;
 /// <summary>
 /// Root configuration model bound from appsettings.json.
 /// Contains all connections, producers, and consumers definitions.

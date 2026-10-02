@@ -1,12 +1,12 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Extensions;
 using RabbitMQ.Client;
-namespace RabbitFlow.Tests.Integration;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Extensions;
+namespace RedRabbit.Tests.Integration;
 
 [Collection(RabbitMqCollection.Name)]
 public class RetryAndDeadLetterTests(RabbitMqFixture fixture)

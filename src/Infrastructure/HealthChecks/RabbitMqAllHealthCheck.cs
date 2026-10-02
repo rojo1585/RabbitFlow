@@ -1,12 +1,9 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Infrastructure.HealthChecks;
+namespace RedRabbit.Infrastructure.HealthChecks;
 
 // <summary>
 /// Combined health check that reports on ALL configured RabbitMQ connections.

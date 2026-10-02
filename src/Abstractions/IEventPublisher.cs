@@ -1,6 +1,6 @@
-﻿using RabbitFlow.Exceptions;
+﻿using RedRabbit.Exceptions;
 
-namespace RabbitFlow.Abstractions;
+namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Publishes integration events to RabbitMQ.

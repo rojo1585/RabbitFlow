@@ -1,10 +1,10 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Configuration;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Infrastructure.Connection;
+namespace RedRabbit.Infrastructure.Connection;
 
 /// <summary>
 /// Manages a single named RabbitMQ connection with automatic reconnection
@@ -220,7 +220,8 @@ internal sealed class ManagedConnection(string _name, RabbitConnectionOptions _o
             Password = _options.Password,
             VirtualHost = _options.VirtualHost,
             RequestedHeartbeat = TimeSpan.FromSeconds(_options.RequestedHeartbeatSeconds),
-            ContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
+            HandshakeContinuationTimeout = TimeSpan.FromSeconds(_options.ConnectionTimeoutSeconds),
             AutomaticRecoveryEnabled = false,
             TopologyRecoveryEnabled = false,
         };
@@ -339,31 +340,27 @@ internal sealed class ManagedConnection(string _name, RabbitConnectionOptions _o
 
     /// <summary>
     /// Builds <see cref="SslOption"/> from <see cref="TlsOptions"/>.
-    /// Called only when TLS is enabled.
+    /// Called only when TLS is enabled. Certificate validation rules are documented in
+    /// <see cref="TlsCertificateValidator"/>.
     /// </summary>
-    private static SslOption BuildSslOptions(TlsOptions tls)
+    private SslOption BuildSslOptions(TlsOptions tls)
     {
-        var ssl = new SslOption
+        if (tls.AllowUnknownCAs && tls.CaCertificatePath is null)
+            _logger.LogWarning("[{Name}] TLS AllowUnknownCAs=true: server certificates from untrusted CAs are accepted. Do not use in production; configure Tls.CaCertificatePath instead.", Name);
+
+        if (tls.DisableCertificateRevocationCheck)
+            _logger.LogWarning("[{Name}] TLS certificate revocation checking is disabled.", Name);
+
+        return new SslOption
         {
             Enabled = true,
-            ServerName = tls.ServerName ?? string.Empty,
+            ServerName = tls.ServerName ?? _options.HostName,
             CertPath = tls.CertPath ?? string.Empty,
             CertPassphrase = tls.CertPassphrase,
             Version = tls.Protocol,
+            CheckCertificateRevocation = !tls.DisableCertificateRevocationCheck,
+            CertificateValidationCallback = TlsCertificateValidator.CreateCallback(tls),
         };
-
-        if (tls.AllowUnknownCAs || tls.DisableCertificateRevocationCheck)
-        {
-            ssl.CertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
-            {
-                if (tls.AllowUnknownCAs && sslPolicyErrors == System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors)
-                    return true;
-
-                return sslPolicyErrors == System.Net.Security.SslPolicyErrors.None;
-            };
-        }
-
-        return ssl;
     }
 
     /// <summary>

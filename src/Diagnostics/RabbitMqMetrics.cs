@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics.Metrics;
-using System.Text;
+﻿using System.Diagnostics.Metrics;
 
-namespace RabbitFlow.Diagnostics;
+namespace RedRabbit.Diagnostics;
 
 
 /// <summary>

@@ -1,8 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using RedRabbit.Configuration;
 
-namespace RabbitFlow.Abstractions;
+namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Represents a message that has been routed to the dead-letter queue after
@@ -41,7 +39,7 @@ public sealed class DeadLetterMessage
 
     /// <summary>
     /// How many times the message was attempted before being dead-lettered.
-    /// Should equal <see cref="Configuration.RabbitConsumerOptions.MaxRetries"/>.
+    /// Should equal <see cref="RabbitConsumerOptions.MaxRetries"/>.
     /// </summary>
     public int RetryCount { get; init; }
 
@@ -51,7 +49,7 @@ public sealed class DeadLetterMessage
     public DateTime DeadLetteredAt { get; init; } = DateTime.UtcNow;
 
     /// <summary>
-    /// The <see cref="Configuration.RabbitConsumerOptions.ServiceKey"/>
+    /// The <see cref="RabbitConsumerOptions.ServiceKey"/>
     /// of the consumer that failed to process this message.
     /// </summary>
     public required string ConsumerKey { get; init; }

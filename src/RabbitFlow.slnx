@@ -1,4 +1,0 @@
-<Solution>
-  <Project Path="../tests/RabbitFlow.Tests/RabbitFlow.Tests.csproj" />
-  <Project Path="RabbitFlow.csproj" />
-</Solution>

@@ -1,12 +1,7 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Infrastructure.Consuming;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using RedRabbit.Infrastructure.Consuming;
 
-namespace RabbitFlow.Tests.Unit.Consuming;
+namespace RedRabbit.Tests.Unit.Consuming;
 
 
 public class HandlerTypeRegistryTests

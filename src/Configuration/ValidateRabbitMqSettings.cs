@@ -1,8 +1,8 @@
 ﻿using Microsoft.Extensions.Options;
-using RabbitFlow.Exceptions;
+using RedRabbit.Exceptions;
 
 
-namespace RabbitFlow.Configuration;
+namespace RedRabbit.Configuration;
 
 /// <summary>
 /// Validates <see cref="RabbitMqSettings"/> using the idiomatic
@@ -91,6 +91,9 @@ internal sealed class ValidateRabbitMqSettings : IValidateOptions<RabbitMqSettin
 
             if (conn.MaxBackoffSeconds < 1)
                 errors.Add($"{prefix}: MaxBackoffSeconds must be >= 1 (got {conn.MaxBackoffSeconds}).");
+
+            if (conn.Tls is { Enabled: true, CaCertificatePath: { } caPath } && !File.Exists(caPath))
+                errors.Add($"{prefix}: Tls.CaCertificatePath '{caPath}' does not exist.");
         }
     }
 

@@ -1,7 +1,7 @@
 using FluentAssertions;
-using RabbitFlow.Abstractions;
+using RedRabbit.Abstractions;
 
-namespace RabbitFlow.Tests.Unit.Abstractions;
+namespace RedRabbit.Tests.Unit.Abstractions;
 
 public class MessageEnvelopeTests
 {

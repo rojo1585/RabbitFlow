@@ -1,13 +1,14 @@
-﻿using System.Diagnostics;
+﻿using RedRabbit.Configuration;
+using System.Diagnostics;
 
-namespace RabbitFlow.Diagnostics;
+namespace RedRabbit.Diagnostics;
 /// <summary>
 /// Central <see cref="ActivitySource"/> for all distributed tracing.
 /// 
 /// <para>
 /// The <see cref="SourceName"/> and <see cref="Source"/> are initialized once during
 /// <c>AddRabbitMQ()</c> via <see cref="Initialize"/>. Before initialization, defaults
-/// to <see cref="Configuration.RabbitMqSettings.DefaultInstrumentationName"/>.
+/// to <see cref="RabbitMqSettings.DefaultInstrumentationName"/>.
 /// </para>
 /// 
 /// <para>
@@ -37,14 +38,14 @@ public static class RabbitMqActivitySource
     /// Consumers must pass this exact string to <c>AddSource()</c>.
     /// Set during <see cref="Initialize"/>.
     /// </summary>
-    public static string SourceName { get; private set; } = Configuration.RabbitMqSettings.DefaultInstrumentationName;
+    public static string SourceName { get; private set; } = RabbitMqSettings.DefaultInstrumentationName;
 
     /// <summary>
     /// The singleton <see cref="ActivitySource"/> instance.
     /// All publisher and consumer activities are created through this.
     /// Replaced during <see cref="Initialize"/>.
     /// </summary>
-    public static ActivitySource Source { get; private set; } = new(Configuration.RabbitMqSettings.DefaultInstrumentationName, "1.0.0");
+    public static ActivitySource Source { get; private set; } = new(RabbitMqSettings.DefaultInstrumentationName, "1.0.0");
 
     /// <summary>
     /// Whether <see cref="Initialize"/> has been called.

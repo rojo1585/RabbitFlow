@@ -1,11 +1,11 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
-using RabbitFlow.Infrastructure.Connection;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Exceptions;
+using RedRabbit.Infrastructure.Connection;
 
-namespace RabbitFlow.Infrastructure.Publishing;
+namespace RedRabbit.Infrastructure.Publishing;
 /// <summary>
 /// Facade that implements <see cref="IEventPublisher"/> and <see cref="IBatchEventPublisher"/>.
 /// Routes publish calls to the correct <see cref="NamedRabbitPublisher"/> based on

@@ -1,12 +1,7 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Diagnostics;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using RedRabbit.Diagnostics;
 
-namespace RabbitFlow.Tests.Unit.Diagnostics;
+namespace RedRabbit.Tests.Unit.Diagnostics;
 
 
 public class RabbitMqActivitySourceTests
@@ -14,7 +9,7 @@ public class RabbitMqActivitySourceTests
     [Fact]
     public void DefaultSourceName_IsDefaultInstrumentationName()
     {
-        RabbitMqActivitySource.SourceName.Should().Be(RabbitFlow.Configuration.RabbitMqSettings.DefaultInstrumentationName);
+        RabbitMqActivitySource.SourceName.Should().Be(RedRabbit.Configuration.RabbitMqSettings.DefaultInstrumentationName);
     }
 
     [Fact]

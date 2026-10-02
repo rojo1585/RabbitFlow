@@ -1,13 +1,8 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using RedRabbit.Configuration;
 using System.Security.Authentication;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace RabbitFlow.Tests.Unit.Configuration;
+namespace RedRabbit.Tests.Unit.Configuration;
 
 public class TlsOptionsTests
 {

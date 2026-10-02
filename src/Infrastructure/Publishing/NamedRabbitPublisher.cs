@@ -1,21 +1,17 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Exceptions;
-using RabbitFlow.Infrastructure.Connection;
-using RabbitFlow.Infrastructure.Topology;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
-using System;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Exceptions;
+using RedRabbit.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Topology;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
-using System.Text;
 
-namespace RabbitFlow.Infrastructure.Publishing;
+namespace RedRabbit.Infrastructure.Publishing;
 
 /// <summary>
 /// Publishes events to a single RabbitMQ exchange using a named connection.

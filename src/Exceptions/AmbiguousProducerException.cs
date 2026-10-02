@@ -1,8 +1,10 @@
-﻿namespace RabbitFlow.Exceptions;
+﻿using RedRabbit.Abstractions;
+
+namespace RedRabbit.Exceptions;
 
 /// <summary>
-/// Thrown when <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, Abstractions.PublishOptions?, CancellationToken)"/>
-/// is called without a producer key (i.e. <see cref="Abstractions.PublishOptions.ProducerKey"/> is null)
+/// Thrown when <see cref="Abstractions.IEventPublisher.PublishAsync{TEvent}(TEvent, RedRabbit.Abstractions.PublishOptions?, CancellationToken)"/>
+/// is called without a producer key (i.e. <see cref="PublishOptions.ProducerKey"/> is null)
 /// but multiple producers are registered.
 /// </summary>
 public sealed class AmbiguousProducerException : RabbitMqException

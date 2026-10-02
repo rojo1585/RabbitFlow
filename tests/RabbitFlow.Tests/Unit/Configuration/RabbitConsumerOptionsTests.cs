@@ -1,7 +1,7 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Configuration;
+using RedRabbit.Configuration;
 
-namespace RabbitFlow.Tests.Unit.Configuration;
+namespace RedRabbit.Tests.Unit.Configuration;
 
 
 public class RabbitConsumerOptionsTests

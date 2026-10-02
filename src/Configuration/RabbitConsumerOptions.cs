@@ -1,4 +1,4 @@
-﻿namespace RabbitFlow.Configuration;
+﻿namespace RedRabbit.Configuration;
 /// <summary>
 /// Defines a message consumer bound to a specific queue, exchange, and connection.
 /// The <see cref="ServiceKey"/> is used to map <see cref="Abstractions.IRabbitHandler{T}"/>

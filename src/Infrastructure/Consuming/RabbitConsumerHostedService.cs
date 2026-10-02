@@ -2,13 +2,13 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Abstractions;
-using RabbitFlow.Configuration;
-using RabbitFlow.Diagnostics;
-using RabbitFlow.Infrastructure.Connection;
-using RabbitFlow.Infrastructure.Versioning;
+using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
+using RedRabbit.Diagnostics;
+using RedRabbit.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Versioning;
 
-namespace RabbitFlow.Infrastructure.Consuming;
+namespace RedRabbit.Infrastructure.Consuming;
 
 /// <summary>
 /// <see cref="BackgroundService"/> that starts and manages all configured consumers.

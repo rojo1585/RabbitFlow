@@ -1,4 +1,6 @@
-﻿namespace RabbitFlow.Diagnostics;
+﻿using RedRabbit.Configuration;
+
+namespace RedRabbit.Diagnostics;
 
 /// <summary>
 /// Standard header names injected by the publisher and extracted by the consumer.
@@ -27,7 +29,7 @@ public static class MessageHeaders
     public const string PublishedAt = "x-published-at";
 
     /// <summary>
-    /// The <see cref="Configuration.RabbitProducerOptions.ServiceKey"/> of the producer.
+    /// The <see cref="RabbitProducerOptions.ServiceKey"/> of the producer.
     /// Header key: x-publisher-name
     /// </summary>
     public const string PublisherName = "x-publisher-name";

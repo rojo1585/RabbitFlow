@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<PackageId>RedRabbit</PackageId>
+		<Version>0.1.0-preview.1</Version>
+		<Authors>Rojo1585</Authors>
+		<Description>Lightweight RabbitMQ messaging for .NET built on RabbitMQ.Client 7: multi-connection and multi-producer publishing with publisher confirms and channel pooling, hosted consumers with delayed retries and dead-lettering, batch consumers, event versioning, health checks, and OpenTelemetry tracing and metrics.</Description>
+		<PackageTags>rabbitmq;amqp;messaging;eventbus;events;publisher;consumer;dead-letter;retry;opentelemetry</PackageTags>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageProjectUrl>https://github.com/rojo1585/RabbitFlow</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/rojo1585/RabbitFlow</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<Deterministic>true</Deterministic>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+	</PropertyGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.0" />
+	  <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.0.0" />
+	  <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
+	  <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+	  <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
+	  <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
+	</ItemGroup>
+	
+	<ItemGroup>
+		<InternalsVisibleTo Include="RedRabbit.Tests" />
+	</ItemGroup>
+</Project>

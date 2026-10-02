@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace RabbitFlow.Exceptions
+﻿namespace RedRabbit.Exceptions
 {
     /// <summary>
     /// Thrown when attempting to publish to a producer key that is not registered.

@@ -1,4 +1,4 @@
-﻿namespace RabbitFlow.Exceptions;
+﻿namespace RedRabbit.Exceptions;
 
 /// <summary>
 /// Base exception for all RabbitMQ library errors.

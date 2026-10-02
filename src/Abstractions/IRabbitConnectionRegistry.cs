@@ -1,4 +1,4 @@
-﻿namespace RabbitFlow.Abstractions;
+﻿namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Provides visibility into the state of all managed RabbitMQ connections.
