@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 using RedRabbit.Configuration;
 using RedRabbit.Extensions;
 
-namespace RabbitFlow.Tests.Integration;
+namespace RedRabbit.Tests.Integration;
 
 
 [Collection(RabbitMqCollection.Name)]

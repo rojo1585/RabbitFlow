@@ -1,12 +1,7 @@
 ﻿using FluentAssertions;
 using RedRabbit.Diagnostics;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace RabbitFlow.Tests.Unit.Diagnostics;
+namespace RedRabbit.Tests.Unit.Diagnostics;
 
 
 public class RabbitMqActivitySourceTests

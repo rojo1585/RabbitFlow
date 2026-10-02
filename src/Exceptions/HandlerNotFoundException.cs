@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace RedRabbit.Exceptions
+﻿namespace RedRabbit.Exceptions
 {
     /// <summary>
     /// Thrown internally when no handler is found for a consumed message.

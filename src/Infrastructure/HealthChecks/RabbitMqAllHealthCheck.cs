@@ -2,9 +2,6 @@
 using Microsoft.Extensions.Options;
 using RedRabbit.Abstractions;
 using RedRabbit.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RedRabbit.Infrastructure.HealthChecks;
 

@@ -1,8 +1,5 @@
 ﻿using RabbitMQ.Client;
 using RedRabbit.Abstractions;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RedRabbit.Infrastructure.Consuming
 {/// <summary>

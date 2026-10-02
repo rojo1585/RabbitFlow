@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace RedRabbit.Abstractions;
+﻿namespace RedRabbit.Abstractions;
 
 /// <summary>
 /// Pluggable serialization strategy for message bodies.

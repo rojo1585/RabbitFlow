@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 using RedRabbit.Abstractions;
 using RedRabbit.Configuration;
@@ -8,12 +7,9 @@ using RedRabbit.Diagnostics;
 using RedRabbit.Exceptions;
 using RedRabbit.Infrastructure.Connection;
 using RedRabbit.Infrastructure.Topology;
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
-using System.Text;
 
 namespace RedRabbit.Infrastructure.Publishing;
 

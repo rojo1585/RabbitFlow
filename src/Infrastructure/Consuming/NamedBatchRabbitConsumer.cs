@@ -9,7 +9,6 @@ using RedRabbit.Diagnostics;
 using RedRabbit.Exceptions;
 using RedRabbit.Infrastructure.Connection;
 using RedRabbit.Infrastructure.Topology;
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Linq.Expressions;

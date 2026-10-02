@@ -1,15 +1,10 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using RabbitFlow.Diagnostics;
+using RedRabbit.Diagnostics;
 using RedRabbit.Exceptions;
 using RedRabbit.Infrastructure.Versioning;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace RabbitFlow.Tests.Unit.Versioning;
+namespace RedRabbit.Tests.Unit.Versioning;
 
 public class EventUpgraderRegistryTests
 {

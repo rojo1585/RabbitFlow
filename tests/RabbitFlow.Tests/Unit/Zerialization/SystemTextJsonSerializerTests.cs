@@ -2,14 +2,10 @@
 using RedRabbit.Abstractions;
 using RedRabbit.Exceptions;
 using RedRabbit.Infrastructure.Serialization;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 
-namespace RabbitFlow.Tests.Unit.Zerialization;
+namespace RedRabbit.Tests.Unit.Zerialization;
 
 public class SystemTextJsonSerializerTests
 {

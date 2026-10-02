@@ -2,15 +2,15 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
-using RabbitFlow.Configuration;
-using RabbitFlow.Infrastructure.Publishing;
 using RedRabbit.Abstractions;
+using RedRabbit.Configuration;
 using RedRabbit.Diagnostics;
 using RedRabbit.Exceptions;
 using RedRabbit.Infrastructure.Connection;
+using RedRabbit.Infrastructure.Publishing;
 
 
-namespace RabbitFlow.Tests.Unit.Publishing;
+namespace RedRabbit.Tests.Unit.Publishing;
 
 public class CompositeEventPublisherTests
 {

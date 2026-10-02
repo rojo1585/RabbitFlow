@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace RedRabbit.Configuration;
+﻿namespace RedRabbit.Configuration;
 
 
 /// <summary>

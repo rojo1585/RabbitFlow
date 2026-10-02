@@ -1,13 +1,8 @@
 ﻿using DotNet.Testcontainers.Builders;
 using RabbitMQ.Client;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Testcontainers.RabbitMq;
 
-namespace RabbitFlow.Tests.Integration;
+namespace RedRabbit.Tests.Integration;
 
 
 

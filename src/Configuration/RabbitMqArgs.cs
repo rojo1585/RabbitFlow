@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace RedRabbit.Configuration;
+﻿namespace RedRabbit.Configuration;
 
 /// <summary>
 /// Well-known RabbitMQ argument keys and values for use in

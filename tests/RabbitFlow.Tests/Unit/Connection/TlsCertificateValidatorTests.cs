@@ -1,12 +1,11 @@
 ﻿using FluentAssertions;
-using global::RabbitFlow.Configuration;
-using global::RabbitFlow.Infrastructure.Connection;
+using RedRabbit.Configuration;
 using RedRabbit.Infrastructure.Connection;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
-namespace RabbitFlow.Tests.Unit.Connection;
+namespace RedRabbit.Tests.Unit.Connection;
 
 public class TlsCertificateValidatorTests
 {

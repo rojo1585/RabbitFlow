@@ -1,12 +1,7 @@
 ﻿using FluentAssertions;
-using RabbitFlow.Diagnostics;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using RedRabbit.Diagnostics;
 
-namespace RabbitFlow.Tests.Unit.Versioning;
+namespace RedRabbit.Tests.Unit.Versioning;
 
 
 public class EventVersionAttributeTests

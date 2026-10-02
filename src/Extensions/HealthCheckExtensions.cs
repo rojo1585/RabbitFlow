@@ -1,12 +1,9 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
-using RabbitFlow.Infrastructure.HealthChecks;
 using RedRabbit.Abstractions;
 using RedRabbit.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using RedRabbit.Infrastructure.HealthChecks;
 
 namespace RedRabbit.Extensions;
 

@@ -3,10 +3,7 @@ using RedRabbit.Abstractions;
 using RedRabbit.Configuration;
 using RedRabbit.Diagnostics;
 using RedRabbit.Infrastructure.Consuming;
-using System;
-using System.Collections.Generic;
 using System.Reflection;
-using System.Text;
 
 namespace RedRabbit.Extensions
 {

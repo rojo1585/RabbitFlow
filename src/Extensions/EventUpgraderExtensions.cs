@@ -2,11 +2,8 @@
 using RedRabbit.Abstractions;
 using RedRabbit.Diagnostics;
 using RedRabbit.Infrastructure.Versioning;
-using System;
-using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text;
 
 namespace RedRabbit.Extensions
 {

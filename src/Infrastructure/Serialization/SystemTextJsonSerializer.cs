@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
-using RabbitFlow.Exceptions;
 using RedRabbit.Abstractions;
+using RedRabbit.Exceptions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 

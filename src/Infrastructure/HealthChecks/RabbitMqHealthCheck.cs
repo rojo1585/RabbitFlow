@@ -1,8 +1,5 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
 using RedRabbit.Abstractions;
-using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace RedRabbit.Infrastructure.HealthChecks;
 

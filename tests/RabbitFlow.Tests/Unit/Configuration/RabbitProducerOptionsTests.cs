@@ -1,12 +1,7 @@
 ﻿using FluentAssertions;
 using RedRabbit.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
-namespace RabbitFlow.Tests.Unit.Configuration;
+namespace RedRabbit.Tests.Unit.Configuration;
 
 
 public class RabbitProducerOptionsTests
