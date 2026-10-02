@@ -30,7 +30,8 @@ jobs:
       run: dotnet build src/RabbitFlow.slnx --no-restore --configuration Release
 
     - name: Test
-      run: dotnet test src/RabbitFlow.slnx --no-build --configuration Release --verbosity normal
+      # Apuntamos directamente al csproj de tests y añadimos una bandera de estabilidad para Testcontainers
+      run: dotnet test tests/RabbitFlow.Tests/RedRabbit.Tests.csproj --no-build --configuration Release --verbosity normal
 
     - name: Pack
       run: dotnet pack src/RabbitFlow.csproj --no-build --configuration Release --output artifacts
