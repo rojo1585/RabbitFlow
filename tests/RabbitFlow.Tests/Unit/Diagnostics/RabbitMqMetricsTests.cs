@@ -3,7 +3,6 @@ using RedRabbit.Diagnostics;
 
 namespace RedRabbit.Tests.Unit.Diagnostics;
 
-
 public class RabbitMqMetricsTests
 {
     private const string TestMeterName = "Test.RabbitMQ.Metrics";
@@ -55,6 +54,13 @@ public class RabbitMqMetricsTests
     {
         using var metrics = new RabbitMqMetrics(TestMeterName);
         metrics.DeadLettered.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void HandlersAbandoned_CounterIsNotNull()
+    {
+        using var metrics = new RabbitMqMetrics(TestMeterName);
+        metrics.HandlersAbandoned.Should().NotBeNull();
     }
 
     [Fact]

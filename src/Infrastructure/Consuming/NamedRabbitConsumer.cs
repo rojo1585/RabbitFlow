@@ -27,8 +27,8 @@ namespace RedRabbit.Infrastructure.Consuming;
 /// </para>
 ///
 /// <para>
-/// Concurrency: Controlled by <see cref="RabbitConsumerOptions.PrefetchCount"/> (AMQP level)
-/// and optionally <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/> (handler level
+/// Concurrency: Controlled by <see cref="RabbitConsumerOptions.PrefetchCount"/>
+/// and optionally <see cref="RabbitConsumerOptions.MaxConcurrentHandlers"/>
 /// via <see cref="SemaphoreSlim"/>).
 /// </para>
 /// </summary>
@@ -144,10 +144,10 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                 if (_options.MaxConcurrentHandlers > 0)
                 {
                     var dispatchConcurrency = (ushort)Math.Min(65535, _options.MaxConcurrentHandlers);
-                  channelOptions = new CreateChannelOptions(
-                        publisherConfirmationsEnabled: false,
-                        publisherConfirmationTrackingEnabled: false,
-                        consumerDispatchConcurrency: dispatchConcurrency);
+                    channelOptions = new CreateChannelOptions(
+                          publisherConfirmationsEnabled: false,
+                          publisherConfirmationTrackingEnabled: false,
+                          consumerDispatchConcurrency: dispatchConcurrency);
                 }
                 else if (_options.PrefetchCount > 1)
                 {
@@ -180,7 +180,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     shutdownTcs.TrySetResult(true);
                     return Task.CompletedTask;
                 }
-          channel.ChannelShutdownAsync += OnShutdown;
+                channel.ChannelShutdownAsync += OnShutdown;
 
                 var consumerTag = await channel.BasicConsumeAsync(
                     queue: _options.QueueName,
@@ -193,7 +193,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
                 try
                 {
-  var stoppingTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var stoppingTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                     using var reg = cancellationToken.Register(() => stoppingTcs.TrySetResult(true));
 
                     await Task.WhenAny(shutdownTcs.Task, stoppingTcs.Task).ConfigureAwait(false);
@@ -201,7 +201,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     if (stoppingTcs.Task.IsCompleted)
                     {
 
-                        _isShuttingDown = true; 
+                        _isShuttingDown = true;
                         await GracefulDrainAsync(channel, consumerTag).ConfigureAwait(false);
                     }
                 }
@@ -294,7 +294,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         }
         catch (ObjectDisposedException) { }
 
-    if (remaining > 0)
+        if (remaining > 0)
         {
             try
             {
@@ -321,7 +321,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
 
     private async Task OnMessageReceived(IChannel channel, BasicDeliverEventArgs ea)
     {
-    Interlocked.Increment(ref _inFlightCount);
+        Interlocked.Increment(ref _inFlightCount);
         try
         {
             var body = ea.Body;
@@ -562,119 +562,146 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                                                    ActivityContext parentContext,
                                                    CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var handler = scope.ServiceProvider.GetService(handlerType);
-
-        if (handler is null)
-        {
-            _logger.LogError("[Consumer:{Key}] Handler '{HandlerType}' not in DI — Nack (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
-            await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
-            return;
-        }
-
-        using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
-
-        processActivity?.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
-
-        var handlerSw = ValueStopwatch.StartNew();
+        var scope = _scopeFactory.CreateAsyncScope();
+        var scopeOwnedByAbandonedHandler = false;
         try
         {
-            var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
-            var handlerTask = invoker(handler, @event, context, cancellationToken);
+            var handler = scope.ServiceProvider.GetService(handlerType);
 
-            var shutdownTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var registration = _shutdownCts.Token.Register(() => shutdownTcs.TrySetResult(true));
-
-            var winner = await Task.WhenAny(handlerTask, shutdownTcs.Task).ConfigureAwait(false);
-
-            if (winner == handlerTask)
+            if (handler is null)
             {
-
-                await handlerTask.ConfigureAwait(false);
-
-                await AckAsync(channel, deliveryTag)
-                    .ConfigureAwait(false);
-
-                _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
-                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                    new(RabbitMqMetrics.TagEventType, eventTypeName),
-                    new(RabbitMqMetrics.TagQueue, _options.QueueName));
-
-                _metrics.Consumed.Add(1,
-                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                    new(RabbitMqMetrics.TagEventType, eventTypeName),
-                    new(RabbitMqMetrics.TagQueue, _options.QueueName));
+                _logger.LogError("[Consumer:{Key}] Handler '{HandlerType}' not in DI — Nack (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
+                await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
+                return;
             }
-            else
-            {
-                _logger.LogWarning("[Consumer:{Key}] Handler '{HandlerType}' did not complete within {Timeout}s during shutdown — NACK with requeue (deliveryTag={Tag}). The handler may still be running in the background.",
-                    _consumerKey, handlerType.Name, _options.ShutdownDrainTimeout.TotalSeconds, deliveryTag);
 
-                await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+            using var processActivity = StartConsumeActivity(eventTypeName, ea, parentContext, RabbitMqActivitySource.OperationProcess);
+
+            processActivity?.SetTag(RabbitMqActivitySource.TagMessagingDeliveryAttempt, deliveryCount);
+
+            var handlerSw = ValueStopwatch.StartNew();
+            try
+            {
+                var invoker = HandlerInvokers.GetOrAdd(handlerType, CompileInvoker);
+                var handlerTask = invoker(handler, @event, context, cancellationToken);
+
+                var outcome = await HandlerExecution.WaitAsync(
+                    handlerTask,
+                    scope,
+                    error => OnAbandonedHandlerFinished(handlerType, deliveryTag, error),
+                    _logger, 
+                    _shutdownCts.Token).ConfigureAwait(false);
+
+                scopeOwnedByAbandonedHandler = outcome == HandlerOutcome.Abandoned;
+
+                if (outcome == HandlerOutcome.Completed)
+                {
+                    await AckAsync(channel, deliveryTag)
+                        .ConfigureAwait(false);
+
+                    _metrics.ProcessingDurationMs.Record(handlerSw.GetElapsedMilliseconds(),
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+                    _metrics.Consumed.Add(1,
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName));
+                }
+                else
+                {
+                    _logger.LogWarning("[Consumer:{Key}] Handler '{HandlerType}' did not complete within {Timeout}s during shutdown — NACK with requeue (deliveryTag={Tag}). The handler may still be running in the background.",
+                        _consumerKey, handlerType.Name, _options.ShutdownDrainTimeout.TotalSeconds, deliveryTag);
+
+                    await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+
+                    _metrics.ConsumeErrors.Add(1,
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagErrorType, "ShutdownHandlerTimeout"),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+                    _metrics.HandlersAbandoned.Add(1,
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName));
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_isShuttingDown && ex is OperationCanceledException)
+                {
+                    _logger.LogInformation("[Consumer:{Key}] Handler cancelled during graceful shutdown drain — NACK with requeue (deliveryTag={Tag})", _consumerKey, deliveryTag);
+                    await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+                    return;
+                }
 
                 _metrics.ConsumeErrors.Add(1,
                     new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
                     new(RabbitMqMetrics.TagEventType, eventTypeName),
-                    new(RabbitMqMetrics.TagErrorType, "ShutdownHandlerTimeout"),
+                    new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
                     new(RabbitMqMetrics.TagQueue, _options.QueueName));
+
+                processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
+
+                _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
+
+                if (ShouldRetry(deliveryCount))
+                {
+                    _metrics.Retried.Add(1,
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                        new(RabbitMqMetrics.TagAttempt, deliveryCount));
+
+                    _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+
+                    var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
+                    var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay)
+                        .ConfigureAwait(false);
+
+                    if (publishSucceeded)
+                        await AckAsync(channel, deliveryTag).ConfigureAwait(false);
+                    else
+                        await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
+                }
+                else
+                {
+                    _metrics.DeadLettered.Add(1,
+                        new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
+                        new(RabbitMqMetrics.TagEventType, eventTypeName),
+                        new(RabbitMqMetrics.TagQueue, _options.QueueName),
+                        new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
+
+                    if (_options.EnableDeadLetter)
+                        _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering to DLQ (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+                    else
+                        _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — discarding message (EnableDeadLetter=false, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
+
+                    await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
+
+                    await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
+                }
             }
         }
-        catch (Exception ex)
+        finally
         {
-            if (_isShuttingDown && ex is OperationCanceledException)
-            {
-                _logger.LogInformation("[Consumer:{Key}] Handler cancelled during graceful shutdown drain — NACK with requeue (deliveryTag={Tag})", _consumerKey, deliveryTag);
-                await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
-                return;
-            }
-
-            _metrics.ConsumeErrors.Add(1,
-                new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                new(RabbitMqMetrics.TagEventType, eventTypeName),
-                new(RabbitMqMetrics.TagErrorType, ex.GetType().FullName),
-                new(RabbitMqMetrics.TagQueue, _options.QueueName));
-
-            processActivity?.SetTag(RabbitMqActivitySource.TagErrorType, ex.GetType().FullName);
-
-            _logger.LogError(ex, "[Consumer:{Key}] Handler '{HandlerType}' failed attempt {Attempt}/{Max} (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryCount, _retryPolicy?.MaxRetries ?? 1, deliveryTag);
-
-            if (ShouldRetry(deliveryCount))
-            {
-                _metrics.Retried.Add(1,
-                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                    new(RabbitMqMetrics.TagEventType, eventTypeName),
-                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
-                    new(RabbitMqMetrics.TagAttempt, deliveryCount));
-
-                _logger.LogInformation("[Consumer:{Key}] Retrying (attempt {Attempt}, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
-
-                var retryDelay = _retryPolicy!.GetRetryDelay(deliveryCount) ?? TimeSpan.Zero;
-                var publishSucceeded = await PublishToRetryQueueAsync(body, properties, retryDelay)
-                    .ConfigureAwait(false);
-
-                if (publishSucceeded)
-                    await AckAsync(channel, deliveryTag).ConfigureAwait(false);
-                else
-                    await NackAsync(channel, deliveryTag, requeue: true).ConfigureAwait(false);
-            }
-            else
-            {
-                _metrics.DeadLettered.Add(1,
-                    new(RabbitMqMetrics.TagConsumerKey, _consumerKey),
-                    new(RabbitMqMetrics.TagEventType, eventTypeName),
-                    new(RabbitMqMetrics.TagQueue, _options.QueueName),
-                    new(RabbitMqMetrics.TagDlqName, _options.ResolvedDlqName));
-
-                if (_options.EnableDeadLetter)
-                    _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — dead-lettering to DLQ (deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
-                else
-                    _logger.LogWarning("[Consumer:{Key}] Retries exhausted ({Attempts}) — discarding message (EnableDeadLetter=false, deliveryTag={Tag})", _consumerKey, deliveryCount, deliveryTag);
-
-                await NackAsync(channel, deliveryTag, requeue: false).ConfigureAwait(false);
-
-                await InvokeDeadLetterHandlerAsync(ea, body, properties, ex, deliveryCount).ConfigureAwait(false);
-            }
+            if (!scopeOwnedByAbandonedHandler)
+                await scope.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Called when a handler abandoned at shutdown (its message already NACKed with requeue)
+    /// finally finishes and its DI scope has been released.
+    /// </summary>
+    private void OnAbandonedHandlerFinished(Type handlerType, ulong deliveryTag, Exception? error)
+    {
+        if (error is null || error is OperationCanceledException)
+            _logger.LogInformation("[Consumer:{Key}] Abandoned handler '{HandlerType}' finished after shutdown; its message was already requeued and will be redelivered (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
+        else
+            _logger.LogWarning(error, "[Consumer:{Key}] Abandoned handler '{HandlerType}' failed after shutdown; its message was already requeued and will be redelivered (deliveryTag={Tag})", _consumerKey, handlerType.Name, deliveryTag);
     }
 
     private bool ShouldRetry(int deliveryCount)
@@ -1015,7 +1042,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         var remaining = GetInFlightCount();
         if (remaining > 0)
             _logger.LogWarning("[Consumer:{Key}] DisposeAsync: {Count} handler(s) still in flight after drain timeout; disposing semaphore (they may throw ObjectDisposedException on Release).", _consumerKey, remaining);
-        
+
         if (_retryPublisher is not null)
             await _retryPublisher.DisposeAsync().ConfigureAwait(false);
 
