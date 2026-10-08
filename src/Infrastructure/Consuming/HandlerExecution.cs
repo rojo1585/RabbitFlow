@@ -22,14 +22,14 @@ internal enum HandlerOutcome
     Abandoned,
 }
 /// <summary>
-/// WAits for a message handler while honouring  the consumers shutdown signal, without releasing the handlers underneath it
+/// Waits for a message handler while honouring  the consumers shutdown signal, without releasing the handlers underneath it
 /// </summary>
 /// <para>
 /// When shutdown drain timeout expires, consumers stop waiting for slow handlerss and NACK their messages with requeue.
 /// A non cooperative handler keeps running in the background though, and any service it uses such as a <c>DbContext</c> 
 /// must stay alive until it really finishes.
 /// Releasing it earlier makes the handler fail with an <c>ObjectDisposedException</c>.
-/// </para>"
+/// </para>
 internal static class HandlerExecution
 {
     /// <summary>
@@ -58,7 +58,7 @@ internal static class HandlerExecution
 
             if (winner != handlerTask)
             {
-                _ = ReleaseWhenFinishedAscyn(handlerTask, handlerResources, onAbandonedHandlerFinished, logger);
+                _ = ReleaseWhenFinishedAsync(handlerTask, handlerResources, onAbandonedHandlerFinished, logger);
                 return HandlerOutcome.Abandoned;
             }
         }
@@ -66,7 +66,7 @@ internal static class HandlerExecution
         return HandlerOutcome.Completed;
     }
 
-    private static async Task ReleaseWhenFinishedAscyn(Task handlerTask,
+    private static async Task ReleaseWhenFinishedAsync(Task handlerTask,
                                                        IAsyncDisposable handlerResources,
                                                        Action<Exception?> onAbandonedHandlerFinished,
                                                        ILogger logger)
