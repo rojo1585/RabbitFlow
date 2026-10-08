@@ -62,7 +62,8 @@ internal sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _conn
                     serializer: _serializer,
                     scopeFactory: _scopeFactory,
                     logger: _loggerFactory.CreateLogger<NamedBatchRabbitConsumer>(),
-                    metrics: _metrics);
+                    metrics: _metrics,
+                    upgraderRegistry: _upgraderRegistry);
 
                 consumers.Add(batchConsumer);
                 consumerTasks.Add(batchConsumer.RunAsync(stoppingToken));
