@@ -74,6 +74,14 @@ public sealed class RabbitMqMetrics : IDisposable
     public Counter<long> DeadLettered { get; }
 
     /// <summary>
+    /// Number of handlers still running when the shutdown drain timeout expired. Their
+    /// messages were NACKed with requeue (they will be redelivered), while the handlers kept
+    /// running in the background until they finished.
+    /// <para>Tags: <c>consumer_key</c>, <c>event_type</c>, <c>queue</c></para>
+    /// </summary>
+    public Counter<long> HandlersAbandoned { get; }
+
+    /// <summary>
     /// Duration of handler execution in milliseconds.
     /// Measured from handler invocation to ack (or error).
     /// <para>Tags: <c>consumer_key</c>, <c>event_type</c>, <c>queue</c></para>
@@ -163,6 +171,11 @@ public sealed class RabbitMqMetrics : IDisposable
             name: "rabbitflow.dead_lettered",
             unit: "{message}",
             description: "Number of messages sent to dead-letter queue.");
+
+        HandlersAbandoned = _meter.CreateCounter<long>(
+            name: "rabbitflow.handlers_abandoned",
+            unit: "{handler}",
+            description: "Number of handlers still running when the shutdown drain timeout expired (their messages were requeued).");
 
         ProcessingDurationMs = _meter.CreateHistogram<double>(
             name: "rabbitflow.processing_duration_ms",

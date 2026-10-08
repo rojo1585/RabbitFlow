@@ -56,6 +56,49 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
         }
     }
 
+    /// <summary>
+    /// Scoped service that records whether it was disposed while the handler using it was
+    /// still running (regression guard: the consumer must not release the DI scope of a
+    /// handler abandoned at shutdown).
+    /// </summary>
+    private sealed class ScopedProbe : IDisposable
+    {
+        public static int DisposedCount;
+        public static bool DisposedWhileHandlerRunning;
+
+        public bool IsDisposed { get; private set; }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            if (ScopeAwareBlockingHandler.Running)
+                DisposedWhileHandlerRunning = true;
+            Interlocked.Increment(ref DisposedCount);
+        }
+    }
+
+    private class ScopeAwareBlockingHandler(ScopedProbe probe) : IRabbitHandler<ShutdownEvent>
+    {
+        public static int StartedCount;
+        public static int CompletedCount;
+        public static volatile bool Running;
+        public static bool ProbeWasDisposedDuringHandler;
+
+        public async Task HandleAsync(ShutdownEvent @event, MessageContext context, CancellationToken cancellationToken)
+        {
+            Running = true;
+            Interlocked.Increment(ref StartedCount);
+
+            // Ignores the cancellation token on purpose: simulates a non-cooperative handler
+            // that outlives the shutdown drain timeout.
+            await Task.Delay(TimeSpan.FromSeconds(5));
+
+            ProbeWasDisposedDuringHandler = probe.IsDisposed;
+            Running = false;
+            Interlocked.Increment(ref CompletedCount);
+        }
+    }
+
     [Fact]
     public async Task StopAsync_CompletesWithoutHanging()
     {
@@ -266,7 +309,47 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             "and the message NACKed with requeue so the broker can redeliver it on the next consumer start");
     }
 
-    private async Task<IHost> BuildHostAsync(TimeSpan shutdownDrainTimeout, string exchangeName, string queueName, Type handlerType)
+    [Fact]
+    public async Task ShutdownDrain_AbandonedHandler_KeepsScopedServicesAliveUntilItFinishes()
+    {
+        ScopeAwareBlockingHandler.StartedCount = 0;
+        ScopeAwareBlockingHandler.CompletedCount = 0;
+        ScopeAwareBlockingHandler.Running = false;
+        ScopeAwareBlockingHandler.ProbeWasDisposedDuringHandler = false;
+        ScopedProbe.DisposedCount = 0;
+        ScopedProbe.DisposedWhileHandlerRunning = false;
+
+        using var host = await BuildHostAsync(
+            shutdownDrainTimeout: TimeSpan.FromSeconds(1),
+            exchangeName: "shutdown-scope-test",
+            queueName: "shutdown-scope-queue",
+            handlerType: typeof(ScopeAwareBlockingHandler),
+            configureServices: services => services.AddScoped<ScopedProbe>());
+
+        var publisher = host.Services.GetRequiredService<IEventPublisher>();
+
+        await publisher.PublishAsync(new ShutdownEvent(Guid.NewGuid()));
+
+        await WaitForAsync(() => ScopeAwareBlockingHandler.StartedCount >= 1, TimeSpan.FromSeconds(5));
+
+        var stopTask = host.StopAsync();
+        var winner = await Task.WhenAny(stopTask, Task.Delay(TimeSpan.FromSeconds(30)));
+        (winner == stopTask).Should().BeTrue("shutdown must not wait for the abandoned handler");
+
+        // The abandoned handler keeps running in the background after the host stopped.
+        await WaitForAsync(() => ScopedProbe.DisposedCount >= 1, TimeSpan.FromSeconds(15));
+
+        ScopeAwareBlockingHandler.CompletedCount.Should().Be(1,
+            "the abandoned handler should run to completion in the background");
+
+        ScopeAwareBlockingHandler.ProbeWasDisposedDuringHandler.Should().BeFalse(
+            "the handler's scoped services must stay alive until the handler finishes");
+
+        ScopedProbe.DisposedWhileHandlerRunning.Should().BeFalse(
+            "the DI scope must be released only after the abandoned handler finishes");
+    }
+
+    private async Task<IHost> BuildHostAsync(TimeSpan shutdownDrainTimeout, string exchangeName, string queueName, Type handlerType, Action<IServiceCollection>? configureServices = null)
     {
         var hostBuilder = Host.CreateDefaultBuilder();
 
@@ -317,6 +400,8 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
                 .MakeGenericMethod(handlerType);
 
             addRabbitHandlerMethod.Invoke(null, [services, "shutdown-consumer"]);
+
+            configureServices?.Invoke(services);
         });
 
         var host = hostBuilder.Build();
@@ -341,4 +426,3 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
         throw new TimeoutException($"WaitForAsync timed out after {timeout.TotalSeconds}s");
     }
 }
-
