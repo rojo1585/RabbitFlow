@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,6 +23,12 @@ public sealed class RabbitMqBuilder
 {
     private readonly IServiceCollection _services;
     private readonly RabbitMqSettings _settings;
+
+    /// <summary>
+    /// Configuration section the settings come from, when registered from <c>IConfiguration</c>.
+    /// Re-bound when the options are resolved, so later configuration sources are honoured.
+    /// </summary>
+    private readonly IConfiguration? _configurationSection;
     private Type? _customSerializerType;
     private IMessageSerializer? _customSerializerInstance;
     private Action<JsonSerializerOptions>? _jsonOptionsConfigure;
@@ -34,10 +41,11 @@ public sealed class RabbitMqBuilder
     /// </summary>
     private sealed class ConfiguredMarker { }
 
-    internal RabbitMqBuilder(IServiceCollection services, RabbitMqSettings settings)
+    internal RabbitMqBuilder(IServiceCollection services, RabbitMqSettings settings, IConfiguration? configurationSection = null)
     {
         _services = services;
         _settings = settings;
+        _configurationSection = configurationSection;
     }
 
     /// <summary>
@@ -140,15 +148,26 @@ public sealed class RabbitMqBuilder
             ?? _settings.InstrumentationName
             ?? RabbitMqSettings.DefaultInstrumentationName;
 
-        // 1. Configuration (include InstrumentationName so IOptions works)
-        _services.AddOptions<RabbitMqSettings>()
-            .Configure(settings =>
+        // 1. Configuration
+        var optionsBuilder = _services.AddOptions<RabbitMqSettings>();
+
+        if (_configurationSection is not null)
+        {
+            var section = _configurationSection;
+            optionsBuilder.Configure(settings => section.Bind(settings));
+        }
+        else
+        {
+            optionsBuilder.Configure(settings =>
             {
                 settings.Connections = _settings.Connections;
                 settings.Producers = _settings.Producers;
                 settings.Consumers = _settings.Consumers;
-                settings.InstrumentationName = instrName;
-            })
+            });
+        }
+
+        optionsBuilder
+            .PostConfigure(settings => settings.InstrumentationName = instrName)
             .ValidateOnStart();
 
         _services.AddSingleton<IValidateOptions<RabbitMqSettings>, ValidateRabbitMqSettings>();

@@ -46,7 +46,7 @@ public static class ServiceCollectionExtensions
             var settings = new RabbitMqSettings();
             section.Bind(settings);
 
-            var builder = new RabbitMqBuilder(services, settings);
+            var builder = new RabbitMqBuilder(services, settings, section);
             configure?.Invoke(builder);
             builder.Build();
 

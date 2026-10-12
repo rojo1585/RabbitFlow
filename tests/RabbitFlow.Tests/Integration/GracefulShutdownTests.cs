@@ -349,6 +349,37 @@ public class GracefulShutdownTests(RabbitMqFixture fixture)
             "the DI scope must be released only after the abandoned handler finishes");
     }
 
+    [Fact]
+    public async Task ShutdownDrain_LongerThanHostShutdownTimeout_IsCappedSoStopFinishesInTime()
+    {
+        BlockingHandler.StartedCount = 0;
+        BlockingHandler.CompletedCount = 0;
+
+        var hostShutdownTimeout = TimeSpan.FromSeconds(12);
+
+        // Configured drain (60s) is far beyond the host's shutdown timeout (12s): it must be capped
+        // to 12s - 10s reserve = 2s, so the host does not give up while ACK/NACKs are still pending.
+        using var host = await BuildHostAsync(
+            shutdownDrainTimeout: TimeSpan.FromSeconds(60),
+            exchangeName: "shutdown-budget-test",
+            queueName: "shutdown-budget-queue",
+            handlerType: typeof(BlockingHandler),
+            configureServices: services => services.Configure<HostOptions>(o => o.ShutdownTimeout = hostShutdownTimeout));
+
+        var publisher = host.Services.GetRequiredService<IEventPublisher>();
+        await publisher.PublishAsync(new ShutdownEvent(Guid.NewGuid()));
+
+        await WaitForAsync(() => BlockingHandler.StartedCount >= 1, TimeSpan.FromSeconds(5));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await host.StopAsync();
+        sw.Stop();
+
+        sw.Elapsed.Should().BeLessThan(hostShutdownTimeout, "the drain must be capped to fit inside the host's shutdown timeout");
+
+        BlockingHandler.CompletedCount.Should().Be(0, "the 10s handler outlives the capped 2s drain, so it is abandoned and its message requeued");
+    }
+
     private async Task<IHost> BuildHostAsync(TimeSpan shutdownDrainTimeout, string exchangeName, string queueName, Type handlerType, Action<IServiceCollection>? configureServices = null)
     {
         var hostBuilder = Host.CreateDefaultBuilder();

@@ -33,6 +33,11 @@ internal sealed class RetryQueuePublisher : IAsyncDisposable
 
     private const int MaxPoolSize = 8;
 
+    /// <summary>
+    /// Maximum time to wait, on dispose, for in-flight retry publishes to return their channel.
+    /// </summary>
+    private static readonly TimeSpan DisposeTimeout = TimeSpan.FromSeconds(2);
+
     private static readonly CreateChannelOptions ConfirmChannelOptions = new(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true);
 
     private readonly string _consumerKey;
@@ -53,7 +58,8 @@ internal sealed class RetryQueuePublisher : IAsyncDisposable
         _consumerKey = consumerKey;
         _queueName = queueName;
         _logger = logger;
-        _channelPool = new ChannelPool(connection, ConfirmChannelOptions, Math.Clamp(maxConcurrency, 1, MaxPoolSize), logger);
+
+        _channelPool = new ChannelPool(connection, ConfirmChannelOptions, Math.Clamp(maxConcurrency, 1, MaxPoolSize), logger, disposeTimeout: DisposeTimeout);
     }
 
     /// <summary>
@@ -105,7 +111,6 @@ internal sealed class RetryQueuePublisher : IAsyncDisposable
         }
         catch (PublishException ex) when (ex.IsReturn)
         {
-            // basic.return leaves the channel healthy.
             reusable = true;
             _logger.LogError(ex, "[Consumer:{Key}] Retry queue '{RetryQueue}' does not exist (message returned as unroutable). Ensure it is declared (AutoDeclareTopology=true) or create it externally.", _consumerKey, retryQueueName);
             return false;

@@ -22,7 +22,8 @@ internal sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _conn
                                                 ILoggerFactory _loggerFactory,
                                                 RabbitMqMetrics _metrics,
                                                 EventUpgraderRegistry _upgraderRegistry,
-                                                IOptions<RabbitMqSettings> _settings) : BackgroundService
+                                                IOptions<RabbitMqSettings> _settings,
+                                                IServiceProvider _serviceProvider) : BackgroundService
 {
     private readonly ILogger<RabbitConsumerHostedService> _logger = _loggerFactory.CreateLogger<RabbitConsumerHostedService>();
     private readonly List<RabbitConsumerOptions> _consumerConfigs = _settings.Value.Consumers;
@@ -46,8 +47,11 @@ internal sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _conn
         var consumers = new List<IAsyncDisposable>(_consumerConfigs.Count);
         var consumerTasks = new List<Task>(_consumerConfigs.Count);
 
-        foreach (var config in _consumerConfigs)
+        var hostShutdownTimeout = ShutdownBudget.GetHostShutdownTimeout(_serviceProvider);
+
+        foreach (var configured in _consumerConfigs)
         {
+            var config = ApplyShutdownBudget(configured, hostShutdownTimeout);
             var connection = _connectionRegistry.GetConnection(config.ConnectionName);
 
             if (config.EnableBatchConsumer)
@@ -96,17 +100,35 @@ internal sealed class RabbitConsumerHostedService(RabbitConnectionRegistry _conn
         }
         finally
         {
-            foreach (var c in consumers)
-            {
-                try
-                {
-                    await c.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error disposing consumer during shutdown.");
-                }
-            }
+            await Task.WhenAll(consumers.Select(DisposeConsumerAsync)).ConfigureAwait(false);
         }
+    }
+
+    private async Task DisposeConsumerAsync(IAsyncDisposable consumer)
+    {
+        try
+        {
+            await consumer.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error disposing consumer during shutdown.");
+        }
+    }
+
+    /// <summary>
+    /// Returns <paramref name="config"/> with its <see cref="RabbitConsumerOptions.ShutdownDrainTimeout"/>
+    /// capped to what fits in the host's shutdown timeout (see <see cref="ShutdownBudget"/>).
+    /// </summary>
+    private RabbitConsumerOptions ApplyShutdownBudget(RabbitConsumerOptions config, TimeSpan hostShutdownTimeout)
+    {
+        var effective = ShutdownBudget.GetEffectiveDrainTimeout(config.ShutdownDrainTimeout, hostShutdownTimeout);
+        if (effective == config.ShutdownDrainTimeout)
+            return config;
+
+        _logger.LogWarning("[Consumer:{Key}] ShutdownDrainTimeout ({Configured}s) does not fit in the host shutdown timeout ({HostTimeout}s) minus {Reserve}s reserved for closing; using {Effective}s. Increase HostOptions.ShutdownTimeout to allow longer drains.",
+            config.ServiceKey, config.ShutdownDrainTimeout.TotalSeconds, hostShutdownTimeout.TotalSeconds, ShutdownBudget.PostDrainReserve.TotalSeconds, effective.TotalSeconds);
+
+        return config with { ShutdownDrainTimeout = effective };
     }
 }
