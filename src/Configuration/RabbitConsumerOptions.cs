@@ -78,14 +78,23 @@ public sealed record RabbitConsumerOptions
     /// within this timeout are cancelled; their messages are NACKed with requeue=true
     /// (without incrementing the retry count) so the broker redelivers them on the next
     /// startup.
-    /// Defaults to 30 seconds.
+    /// Defaults to 20 seconds.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Set this to a value comfortably larger than the slowest handler's expected duration.
     /// If your handlers call external APIs with their own timeouts, ensure this value is
     /// greater than the sum of those timeouts plus a safety margin.
+    /// </para>
+    /// <para>
+    /// The drain must fit inside the host's shutdown timeout (<c>HostOptions.ShutdownTimeout</c>,
+    /// 30 seconds by default), which also has to cover closing channels and requeuing abandoned
+    /// messages. If this value exceeds the host's shutdown timeout minus 10 seconds, it is capped
+    /// automatically and a warning is logged. To drain for longer, raise the host timeout too, e.g.
+    /// <c>builder.Services.Configure&lt;HostOptions&gt;(o =&gt; o.ShutdownTimeout = TimeSpan.FromSeconds(60))</c>.
+    /// </para>
     /// </remarks>
-    public TimeSpan ShutdownDrainTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan ShutdownDrainTimeout { get; init; } = TimeSpan.FromSeconds(20);
 
     // ─── Dead Letter Settings ──────────────────────────────────────────
 

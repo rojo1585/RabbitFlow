@@ -238,6 +238,17 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     }
 
     /// <summary>
+    /// Maximum time to wait for the broker to confirm the consumer cancellation during shutdown.
+    /// </summary>
+    private static readonly TimeSpan CancelConsumerTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Maximum time <see cref="DisposeAsync"/> waits for in-flight handlers to send their
+    /// requeue NACKs after their wait has been cancelled.
+    /// </summary>
+    private static readonly TimeSpan DisposeGracePeriod = TimeSpan.FromSeconds(3);
+
+    /// <summary>
     /// Performs the graceful-shutdown drain protocol:
     /// <list type="number">
     ///   <item>Cancels the consumer (broker stops delivering NEW messages) via
@@ -263,7 +274,8 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
     {
         try
         {
-            await channel.BasicCancelAsync(consumerTag, cancellationToken: CancellationToken.None)
+            using var cancelTimeout = new CancellationTokenSource(CancelConsumerTimeout);
+            await channel.BasicCancelAsync(consumerTag, cancellationToken: cancelTimeout.Token)
                 .ConfigureAwait(false);
             _logger.LogInformation("[Consumer:{Key}] Consumer cancelled; draining in-flight handlers (timeout={Timeout}s)...", _consumerKey, _options.ShutdownDrainTimeout.TotalSeconds);
         }
@@ -589,7 +601,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
                     handlerTask,
                     scope,
                     error => OnAbandonedHandlerFinished(handlerType, deliveryTag, error),
-                    _logger, 
+                    _logger,
                     _shutdownCts.Token).ConfigureAwait(false);
 
                 scopeOwnedByAbandonedHandler = outcome == HandlerOutcome.Abandoned;
@@ -1030,7 +1042,7 @@ internal sealed class NamedRabbitConsumer : IAsyncDisposable
         try { _shutdownCts.Cancel(); }
         catch (ObjectDisposedException) { }
 
-        var drainDeadline = DateTime.UtcNow + _options.ShutdownDrainTimeout;
+        var drainDeadline = DateTime.UtcNow + DisposeGracePeriod;
         while (DateTime.UtcNow < drainDeadline)
         {
             if (GetInFlightCount() == 0)

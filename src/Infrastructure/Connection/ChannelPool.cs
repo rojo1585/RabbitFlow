@@ -61,6 +61,12 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Used for metrics (<c>rabbitmq.channel_pool.created</c>).
     /// </summary>
     private readonly Action? _onChannelCreated;
+    private readonly TimeSpan _disposeTimeout;
+
+    /// <summary>
+    /// Default maximum time <see cref="DisposeAsync"/> waits for rented channels to be returned.
+    /// </summary>
+    public static readonly TimeSpan DefaultDisposeTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Available (idle) channels ready to be rented.
@@ -78,7 +84,7 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Used for diagnostics and logging only — not for control flow.
     /// </summary>
     private int _currentCount;
-    
+
     //   _disposed: 0 = live, 1 = disposed
     private int _disposed;
 
@@ -110,7 +116,11 @@ internal sealed class ChannelPool : IAsyncDisposable
     /// Optional callback invoked when a new channel is created.
     /// Use this to increment metrics counters.
     /// </param>
-    public ChannelPool(ManagedConnection connection, CreateChannelOptions? channelOptions, int maxSize, ILogger logger, Action? onChannelCreated = null)
+    /// <param name="disposeTimeout">
+    /// Maximum time <see cref="DisposeAsync"/> waits for rented channels to be returned before
+    /// closing the pool. Defaults to <see cref="DefaultDisposeTimeout"/>.
+    /// </param>
+    public ChannelPool(ManagedConnection connection, CreateChannelOptions? channelOptions, int maxSize, ILogger logger, Action? onChannelCreated = null, TimeSpan? disposeTimeout = null)
     {
         if (maxSize < 1)
             throw new ArgumentOutOfRangeException(nameof(maxSize), "Pool size must be >= 1.");
@@ -120,6 +130,7 @@ internal sealed class ChannelPool : IAsyncDisposable
         MaxSize = maxSize;
         _logger = logger;
         _onChannelCreated = onChannelCreated;
+        _disposeTimeout = disposeTimeout ?? DefaultDisposeTimeout;
         _semaphore = new SemaphoreSlim(maxSize, maxSize);
     }
 
@@ -277,7 +288,7 @@ internal sealed class ChannelPool : IAsyncDisposable
             return;
 
         _logger.LogInformation("[ChannelPool] Disposing. Waiting for in-flight channels to return...");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(_disposeTimeout);
 
         for (var i = 0; i < MaxSize; i++)
         {
@@ -303,7 +314,3 @@ internal sealed class ChannelPool : IAsyncDisposable
         _logger.LogInformation("[ChannelPool] Disposed.");
     }
 }
-
-
-
-

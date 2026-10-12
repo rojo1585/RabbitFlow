@@ -22,6 +22,12 @@ public class RabbitConsumerOptionsTests
     }
 
     [Fact]
+    public void DefaultShutdownDrainTimeout_Is20Seconds()
+    {
+        CreateOptions().ShutdownDrainTimeout.Should().Be(TimeSpan.FromSeconds(20), "the default must fit inside the default host shutdown timeout (30s) minus the post-drain reserve (10s)");
+    }
+
+    [Fact]
     public void DefaultEnableRetry_IsTrue()
     {
         CreateOptions().EnableRetry.Should().BeTrue();

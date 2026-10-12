@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using RedRabbit.Abstractions;
 using RedRabbit.Configuration;
 using RedRabbit.Diagnostics;
@@ -22,6 +23,44 @@ public class ServiceCollectionExtensionsTests
         var sp = services.BuildServiceProvider();
         var a = sp.GetService<IEventPublisher>();
         sp.GetService<IEventPublisher>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddRabbitMQ_ConfigurationSourcesAddedAfterRegistration_AreHonoured()
+    {
+        var configuration = new ConfigurationManager();
+        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["RabbitMQ:Connections:main:HostName"] = "initial-host",
+            ["RabbitMQ:Connections:main:UserName"] = "guest",
+            ["RabbitMQ:Connections:main:Password"] = "guest",
+        });
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRabbitMQ(configuration);
+
+        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["RabbitMQ:Connections:main:HostName"] = "overridden-host",
+        });
+
+        var settings = services.BuildServiceProvider().GetRequiredService<IOptions<RabbitMqSettings>>().Value;
+
+        settings.Connections["main"].HostName.Should().Be("overridden-host");
+    }
+
+    [Fact]
+    public void AddRabbitMQ_FromConfiguration_OptionsReportBuilderInstrumentationName()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRabbitMQ(CreateConfiguration(), configure: builder => builder.WithInstrumentationName("Custom.Instrumentation"));
+
+        var sp = services.BuildServiceProvider();
+
+        sp.GetRequiredService<IOptions<RabbitMqSettings>>().Value.InstrumentationName.Should().Be("Custom.Instrumentation");
+        sp.GetRequiredService<RabbitMqMetrics>().MeterName.Should().Be("Custom.Instrumentation");
     }
 
     [Fact]
