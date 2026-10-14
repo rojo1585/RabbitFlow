@@ -5,11 +5,11 @@
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET 8 | 9 | 10" /></a>
-  <a href="https://www.nuget.org/packages/RedRabbit"><img src="https://img.shields.io/nuget/vpre/RedRabbit?style=for-the-badge&logo=nuget&color=004880" alt="NuGet" /></a>
+  <a href="https://www.nuget.org/packages/RedRabbit"><img src="https://img.shields.io/nuget/v/RedRabbit?style=for-the-badge&logo=nuget&color=004880" alt="NuGet" /></a>
   <a href="https://github.com/rojo1585/RedRabbit/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
 </p>
 
-> **Status: pre-release (`0.x`).** The API may still change before 1.0. It is ready for a pilot in a non-critical service; read the [project status](https://github.com/rojo1585/RedRabbit/blob/main/STATUS.md) for current limitations before adopting it.
+> **Status: `1.x`.** The public API follows [Semantic Versioning](https://semver.org): breaking changes only in a new major version. The library has not yet been proven in production at scale, so start with a non-critical service; read the [project status](https://github.com/rojo1585/RedRabbit/blob/main/STATUS.md) for current limitations before adopting it.
 
 ---
 
@@ -36,7 +36,7 @@ RedRabbit is a thin, opinionated layer over `RabbitMQ.Client` 7 for applications
 ## Installation
 
 ```bash
-dotnet add package RedRabbit --prerelease
+dotnet add package RedRabbit
 ```
 
 Requirements: .NET 8, 9 or 10 and the generic host (`Microsoft.Extensions.Hosting`). Integration tests run against RabbitMQ 3.13.

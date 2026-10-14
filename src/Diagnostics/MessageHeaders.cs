@@ -51,7 +51,7 @@ public static class MessageHeaders
     /// Set by the consumer, not the publisher.
     /// Header key: x-consumer-key
     /// </summary>
-    public const string ConsumerKey = "x-consumer-key";
+    internal const string ConsumerKey = "x-consumer-key";
 
     /// <summary>
     /// RedRabbit library header that tracks the delivery count for retry/DLQ decisions.

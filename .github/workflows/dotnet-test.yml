@@ -1,5 +1,5 @@
 # Builds, tests (unit + integration with Testcontainers) and packs on every push/PR to main.
-# Publishing to nuget.org is done by release.yml when a version tag is pushed.
+# Publishing to nuget.org is done on demand by publish.yml (version tag or manual run).
 
 name: .NET
 

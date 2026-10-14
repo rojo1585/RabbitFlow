@@ -1,5 +1,4 @@
 ﻿using FluentAssertions;
-using RedRabbit.Configuration;
 using RedRabbit.Diagnostics;
 
 namespace RedRabbit.Tests.Unit.Diagnostics;
