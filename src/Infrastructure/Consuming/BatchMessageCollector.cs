@@ -1,8 +1,8 @@
 ﻿using RabbitMQ.Client;
 using RedRabbit.Abstractions;
 
-namespace RedRabbit.Infrastructure.Consuming
-{/// <summary>
+namespace RedRabbit.Infrastructure.Consuming;
+/// <summary>
 /// Represents a single buffered message awaiting batch dispatch.
 /// </summary>
 /// <param name="Event">The deserialized event instance.</param>
@@ -11,6 +11,4 @@ namespace RedRabbit.Infrastructure.Consuming
 /// <param name="Body">Original raw body for dead-lettering on failure.</param>
 /// <param name="Properties">Original AMQP properties for dead-lettering.</param>
 /// <param name="EventTypeName">Event type name for logging/metrics.</param>
-    internal sealed record BufferedMessage(object Event, MessageContext Context, ulong DeliveryTag, ReadOnlyMemory<byte> Body, IReadOnlyBasicProperties Properties, string EventTypeName);
-
-}
+internal sealed record BufferedMessage(object Event, MessageContext Context, ulong DeliveryTag, ReadOnlyMemory<byte> Body, IReadOnlyBasicProperties Properties, string EventTypeName);

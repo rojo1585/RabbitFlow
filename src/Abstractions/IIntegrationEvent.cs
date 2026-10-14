@@ -1,12 +1,11 @@
-﻿namespace RedRabbit.Abstractions
-{
-    /// <summary>
-    /// Marker interface for integration events published through RabbitMQ.
-    /// Implement this interface on your event classes/records.
-    /// <para>
-    /// This interface has no members — it exists purely as a type constraint
-    /// to distinguish integration events from other message types.
-    /// </para>
-    /// </summary>
-    public interface IIntegrationEvent;
-}
+﻿namespace RedRabbit.Abstractions;
+
+/// <summary>
+/// Marker interface for integration events published through RabbitMQ.
+/// Implement this interface on your event classes/records.
+/// <para>
+/// This interface has no members — it exists purely as a type constraint
+/// to distinguish integration events from other message types.
+/// </para>
+/// </summary>
+public interface IIntegrationEvent;
