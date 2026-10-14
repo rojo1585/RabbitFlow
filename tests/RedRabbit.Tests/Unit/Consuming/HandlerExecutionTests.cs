@@ -2,11 +2,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using RedRabbit.Infrastructure.Consuming;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace RedRabbit.Tests.Unit.Consuming;
 
