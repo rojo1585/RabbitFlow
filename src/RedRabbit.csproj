@@ -17,8 +17,8 @@
 		<PackageTags>rabbitmq;amqp;messaging;eventbus;events;publisher;consumer;dead-letter;retry;opentelemetry</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
-		<PackageProjectUrl>https://github.com/rojo1585/RabbitFlow</PackageProjectUrl>
-		<RepositoryUrl>https://github.com/rojo1585/RabbitFlow</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/rojo1585/RedRabbit</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/rojo1585/RedRabbit</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 		<EmbedUntrackedSources>true</EmbedUntrackedSources>
