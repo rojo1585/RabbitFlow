@@ -59,7 +59,7 @@ public static class RabbitMqActivitySource
     /// </summary>
     /// <remarks>
     /// <para>
-    /// RabbitFlow uses a static <see cref="ActivitySource"/>, so only one instrumentation name
+    /// RedRabbit uses a static <see cref="ActivitySource"/>, so only one instrumentation name
     /// per process is supported for <b>tracing</b>. If <c>AddRabbitMQ</c> is called multiple
     /// times with different <c>InstrumentationName</c> values (e.g., in test scenarios or
     /// multi-tenant in-process setups), the first call's name is used for the
@@ -72,8 +72,8 @@ public static class RabbitMqActivitySource
     /// independent of this static <see cref="ActivitySource"/>.
     /// </para>
     /// <para>
-    /// To use different tracing instrumentation names in the same process, isolate them
-    /// per app domain or use a custom <see cref="ActivitySource"/> setup outside RabbitFlow.
+    /// To use different tracing instrumentation names, run them in separate processes
+    /// or use a custom <see cref="ActivitySource"/> setup outside RedRabbit.
     /// </para>
     /// </remarks>
     internal static void Initialize(string name)

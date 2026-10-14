@@ -25,7 +25,7 @@ internal enum HandlerOutcome
 /// Waits for a message handler while honouring  the consumers shutdown signal, without releasing the handlers underneath it
 /// </summary>
 /// <para>
-/// When shutdown drain timeout expires, consumers stop waiting for slow handlerss and NACK their messages with requeue.
+/// When shutdown drain timeout expires, consumers stop waiting for slow handlers and NACK their messages with requeue.
 /// A non cooperative handler keeps running in the background though, and any service it uses such as a <c>DbContext</c> 
 /// must stay alive until it really finishes.
 /// Releasing it earlier makes the handler fail with an <c>ObjectDisposedException</c>.

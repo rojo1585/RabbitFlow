@@ -8,8 +8,8 @@ This page describes the current state of RedRabbit: how mature it is, what has b
 
 | | |
 |---|---|
-| **Version** | `0.x` pre-release (first published version: `0.1.0-preview.1`) |
-| **API stability** | Not frozen. Public types and option names may still change before `1.0`. |
+| **Version** | `1.x` (first published version: `1.0.0`) |
+| **API stability** | Follows Semantic Versioning: breaking changes to public types, options or behaviour only in a new major version. Previews of the next major version are published as prereleases (`2.0.0-preview.N`). |
 | **Recommended use** | Pilot in a non-critical service (notifications, audit, webhooks) before business-critical workloads. |
 | **Maintainers** | One. The project is MIT-licensed, so it can be forked and maintained by adopters if needed. |
 
@@ -30,7 +30,7 @@ Not verified: throughput and latency under load (no benchmarks are published), l
 
 ## Limitations
 
-These are known and current. Some are design decisions, others are candidates for improvement before `1.0`.
+These are known and current. Some are design decisions, others are candidates for future versions.
 
 ### Delivery and scope
 
@@ -76,9 +76,9 @@ These are known and current. Some are design decisions, others are candidates fo
 
 ---
 
-## Planned before 1.0
+## Planned
 
-- Freeze and track the public API.
+- Track the public API automatically so breaking changes are caught in CI.
 - Run the test suite on .NET 10 and against RabbitMQ 4.x.
 - Declare producer topology once per connection instead of on every publish.
 - Signal reconnection instead of polling it.

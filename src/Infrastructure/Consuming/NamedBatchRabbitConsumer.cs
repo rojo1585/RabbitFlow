@@ -14,7 +14,6 @@ using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
 using System.Threading.Channels;
-using global::RedRabbit.Infrastructure.Versioning;
 
 namespace RedRabbit.Infrastructure.Consuming;
 /// <summary>

@@ -1,7 +1,7 @@
 # Publishes RedRabbit to nuget.org ON DEMAND — merging to main never publishes by itself.
 #
-#   Tag vX.Y.Z[-pre]               → X.Y.Z[-pre] + GitHub Release   e.g. 0.1.0, 0.1.0-preview.1
-#       git tag v0.1.0 && git push origin v0.1.0
+#   Tag vX.Y.Z[-pre]               → X.Y.Z[-pre] + GitHub Release   e.g. 1.0.0, 2.0.0-preview.1
+#       git tag v1.0.0 && git push origin v1.0.0
 #
 #   Actions → NuGet Publish → "Run workflow" (manual):
 #       channel rc     → {BASE_VERSION}-rc.{run}     only from main          e.g. 0.1.0-rc.13
