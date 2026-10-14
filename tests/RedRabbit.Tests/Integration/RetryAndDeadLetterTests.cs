@@ -293,7 +293,7 @@ public class RetryAndDeadLetterTests(RabbitMqFixture fixture)
         const string exchangeName = "retry-isolation-test";
         const string queueA = "retry-isolation-a-queue";
         const string queueB = "retry-isolation-b-queue";
-        // fanout ignores the routing key for delivery, but RabbitFlow validation requires
+        // fanout ignores the routing key for delivery, but RedRabbit validation requires
         // a non-empty routing key — use a placeholder (same value for both queues is fine,
         // fanout does not filter on it).
         const string routingKey = "isolation";

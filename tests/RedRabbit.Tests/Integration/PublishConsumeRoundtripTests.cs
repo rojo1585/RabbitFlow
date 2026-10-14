@@ -103,7 +103,7 @@ public class PublishConsumeRoundtripTests(RabbitMqFixture fixture)
         hostBuilder.ConfigureLogging(logging =>
         {
             logging.ClearProviders();
-            logging.AddFilter("RabbitFlow", LogLevel.Debug);
+            logging.AddFilter("RedRabbit", LogLevel.Debug);
             logging.AddConsole();
             logging.SetMinimumLevel(LogLevel.Debug);
         });

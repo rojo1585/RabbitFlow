@@ -143,77 +143,77 @@ public sealed class RabbitMqMetrics : IDisposable
         _meter = new Meter(meterName, "1.0.0");
 
         Published = _meter.CreateCounter<long>(
-            name: "rabbitflow.published",
+            name: "redrabbit.published",
             unit: "{message}",
             description: "Number of messages published to RabbitMQ.");
 
         PublishErrors = _meter.CreateCounter<long>(
-            name: "rabbitflow.publish_errors",
+            name: "redrabbit.publish_errors",
             unit: "{error}",
             description: "Number of publish errors (nack, timeout, channel fault).");
 
         Consumed = _meter.CreateCounter<long>(
-            name: "rabbitflow.consumed",
+            name: "redrabbit.consumed",
             unit: "{message}",
             description: "Number of messages successfully consumed and acknowledged.");
 
         ConsumeErrors = _meter.CreateCounter<long>(
-            name: "rabbitflow.consume_errors",
+            name: "redrabbit.consume_errors",
             unit: "{error}",
             description: "Number of handler execution errors during consumption.");
 
         Retried = _meter.CreateCounter<long>(
-            name: "rabbitflow.retried",
+            name: "redrabbit.retried",
             unit: "{message}",
             description: "Number of messages requeued for retry.");
 
         DeadLettered = _meter.CreateCounter<long>(
-            name: "rabbitflow.dead_lettered",
+            name: "redrabbit.dead_lettered",
             unit: "{message}",
             description: "Number of messages sent to dead-letter queue.");
 
         HandlersAbandoned = _meter.CreateCounter<long>(
-            name: "rabbitflow.handlers_abandoned",
+            name: "redrabbit.handlers_abandoned",
             unit: "{handler}",
             description: "Number of handlers still running when the shutdown drain timeout expired (their messages were requeued).");
 
         ProcessingDurationMs = _meter.CreateHistogram<double>(
-            name: "rabbitflow.processing_duration_ms",
+            name: "redrabbit.processing_duration_ms",
             unit: "ms",
             description: "Duration of handler execution in milliseconds.");
 
         PublishDurationMs = _meter.CreateHistogram<double>(
-            name: "rabbitflow.publish_duration_ms",
+            name: "redrabbit.publish_duration_ms",
             unit: "ms",
             description: "Duration of publish operation in milliseconds.");
 
         BatchesDispatched = _meter.CreateCounter<long>(
-            name: "rabbitflow.batches_dispatched",
+            name: "redrabbit.batches_dispatched",
             unit: "{batch}",
             description: "Number of batches dispatched by batch consumers.");
 
         BatchSize = _meter.CreateHistogram<int>(
-            name: "rabbitflow.batch_size",
+            name: "redrabbit.batch_size",
             unit: "{message}",
             description: "Size of each dispatched batch.");
 
         ChannelPoolRented = _meter.CreateCounter<long>(
-            name: "rabbitflow.channel_pool.rented",
+            name: "redrabbit.channel_pool.rented",
             unit: "{operation}",
             description: "Number of channel rentals from publisher channel pools.");
 
         ChannelPoolReturned = _meter.CreateCounter<long>(
-            name: "rabbitflow.channel_pool.returned",
+            name: "redrabbit.channel_pool.returned",
             unit: "{operation}",
             description: "Number of channels returned to publisher channel pools.");
 
         ChannelPoolDiscarded = _meter.CreateCounter<long>(
-            name: "rabbitflow.channel_pool.discarded",
+            name: "redrabbit.channel_pool.discarded",
             unit: "{operation}",
             description: "Number of channels discarded from publisher channel pools (faulted/dirty).");
 
         ChannelPoolCreated = _meter.CreateCounter<long>(
-            name: "rabbitflow.channel_pool.created",
+            name: "redrabbit.channel_pool.created",
             unit: "{channel}",
             description: "Number of new channels created by publisher channel pools.");
     }

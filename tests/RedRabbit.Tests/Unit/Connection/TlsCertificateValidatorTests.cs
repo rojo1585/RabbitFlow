@@ -95,7 +95,7 @@ public class TlsCertificateValidatorTests
     {
         using var ca1 = CreateCa("CN=Root One");
         using var ca2 = CreateCa("CN=Root Two");
-        var path = Path.Combine(Path.GetTempPath(), $"rabbitflow-ca-{Guid.NewGuid():N}.pem");
+        var path = Path.Combine(Path.GetTempPath(), $"redrabbit-ca-{Guid.NewGuid():N}.pem");
         File.WriteAllText(path, ca1.ExportCertificatePem() + "\n" + ca2.ExportCertificatePem());
 
         try
@@ -112,7 +112,7 @@ public class TlsCertificateValidatorTests
     public void LoadCertificates_ReadsDerCertificate()
     {
         using var ca = CreateCa("CN=Root DER");
-        var path = Path.Combine(Path.GetTempPath(), $"rabbitflow-ca-{Guid.NewGuid():N}.cer");
+        var path = Path.Combine(Path.GetTempPath(), $"redrabbit-ca-{Guid.NewGuid():N}.cer");
         File.WriteAllBytes(path, ca.Export(X509ContentType.Cert));
 
         try
