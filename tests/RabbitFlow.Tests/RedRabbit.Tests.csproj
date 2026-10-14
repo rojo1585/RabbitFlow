@@ -22,8 +22,8 @@
 		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
-		<PackageReference Include="Testcontainers" Version="4.4.0" />
-		<PackageReference Include="Testcontainers.RabbitMq" Version="4.4.0" />
+		<PackageReference Include="Testcontainers" Version="4.16.0" />
+		<PackageReference Include="Testcontainers.RabbitMq" Version="4.16.0" />
 	</ItemGroup>
 
 
