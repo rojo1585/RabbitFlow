@@ -1,313 +1,163 @@
-# Concurrency Analysis — RabbitFlow
+# Concurrency Design
 
-> This document records the concurrency design and invariants of RabbitFlow.
-> Future contributors MUST read this before modifying any concurrent code
-> (connection management, channel pooling, consumer loops, event upgrading,
-> static diagnostics).
+This document describes how RedRabbit's concurrent components work today and the invariants they rely on. Read it before changing connection management, channel pools, consumers, shutdown or diagnostics code.
 
-## Summary
+---
 
-| ID  | Component                      | Concern                                    | Status                          |
-|-----|--------------------------------|--------------------------------------------|---------------------------------|
-| C1  | NamedRabbitConsumer            | ACK/NACK on volatile `_currentChannel`     | ✅ Resolved                      |
-| C2  | ChannelPool                    | Rent/return/disc concurrency               | ✅ OK                            |
-| C3  | ManagedConnection              | Reconnect loop race                        | ✅ OK                            |
-| C4  | EventUpgraderRegistry          | Thread safety via immutability             | ✅ OK                            |
-| C5  | HandlerTypeRegistry            | Thread safety via immutability             | ✅ OK                            |
-| C6  | RabbitMqActivitySource         | Static mutable state                       | ✅ OK in practice (documented limitation) |
-| C7  | RabbitConnectionRegistry       | StartAll idempotency                       | ✅ OK                            |
-| C8  | ManagedConnection.DisposeAsync | Possible deadlock                          | ✅ OK (no deadlock)              |
-| C9  | ChannelPool.DisposeAsync       | Possible deadlock                          | ✅ OK (10s latency worst case)   |
+## Overview
 
-## Detailed Analysis
+| Component | Shared by | Concurrency mechanism |
+|---|---|---|
+| `ManagedConnection` | All producers and consumers on one named connection | One reconnection loop; `lock` around connection swaps |
+| `ChannelPool` | Concurrent publishes of one producer; retries of one consumer | `SemaphoreSlim` + `ConcurrentQueue` + `Interlocked` |
+| `RetryQueuePublisher` | Concurrent failing handlers of one consumer | Pooled confirm channels; ACK only after the broker confirms |
+| `NamedRabbitConsumer` | Parallel deliveries on one channel | Driver dispatch concurrency + optional `SemaphoreSlim` limiter |
+| `NamedBatchRabbitConsumer` | Delivery callbacks and one dispatch loop | Bounded `Channel<T>` (many writers, one reader) |
+| `HandlerExecution` | Each handler invocation | Ownership transfer of the DI scope at shutdown |
+| `RabbitConsumerHostedService` | All consumers | Consumers run and dispose in parallel inside a shutdown budget |
+| `HandlerTypeRegistry`, `EventUpgraderRegistry` | All consumers | Immutable after construction |
+| `RabbitMqActivitySource` | Whole process | Static, initialized once under a `lock` |
 
-### C1: NamedRabbitConsumer — ACK/NACK on volatile `_currentChannel` — Resolved
+---
 
-**Concern**: Multiple in-flight messages (with `PrefetchCount > 1`) all used a shared
-`volatile IChannel? _currentChannel` field for ACK/NACK. When the channel dropped, the
-reconnect loop replaced `_currentChannel` with a new channel. In-flight handlers from
-the old channel then ACKed/NACKed on the new channel (with a `deliveryTag` belonging to
-the old channel), producing `AlreadyClosedException` silently swallowed.
+## Connections — `ManagedConnection`
 
-**Resolution**: The concrete `IChannel` is captured in the `OnReceived` closure and
-threaded through `ProcessMessageAsync` → `InvokeHandlerWithRetryAsync` → `AckAsync`/
-`NackAsync`. ACK/NACK always operate on the channel that received the message.
-`AckAsync(IChannel channel, ulong deliveryTag)` and
-`NackAsync(IChannel channel, ulong deliveryTag, bool requeue)` take the channel as
-a parameter and never read `_currentChannel`. The `volatile IChannel? _currentChannel`
-field is kept for diagnostics/future use but is not in the ACK/NACK path.
+- `Start()` runs **one background loop** per connection (guarded by `Interlocked.CompareExchange`); a second call throws.
+- The loop connects, then awaits a `TaskCompletionSource` that is completed when the connection shuts down. It then waits with exponential backoff (1 s doubling up to `MaxBackoffSeconds`) and reconnects.
+- The driver's `AutomaticRecoveryEnabled` and `TopologyRecoveryEnabled` are **off**, so this loop is the only recovery path. Consumers re-declare their own topology when they recreate their channel.
+- `_connection` and its shutdown `TaskCompletionSource` are swapped together under `lock (_lock)`. The shutdown handler clears `_connection` only if the event comes from the current connection (`ReferenceEquals`), so a late event from an old connection is ignored.
+- `CreateChannelAsync` reads the current connection without the lock (it reads a single reference). While the connection is down, it polls every 200 ms until one is available, the timeout (default 30 s) expires, or the caller cancels.
+- `DisposeAsync` is single-shot (`Interlocked.Exchange`). It cancels the loop, waits for it for at most 2 s, and closes the connection. A cancellation registration completes the pending `TaskCompletionSource`, so the loop never blocks disposal.
 
-**Invariant**: `AckAsync` and `NackAsync` MUST accept `IChannel channel` as a parameter
-and use it directly. Never read `_currentChannel` for ACK/NACK operations.
+`RabbitConnectionRegistry` creates one `ManagedConnection` per configured name. `StartAll` can run only once, and its dictionary is never modified after construction.
 
-### C2: ChannelPool — Rent/Return/Discard — OK
+---
 
-**Concern**: The `ChannelPool` is shared across all publishers for one named connection.
-Multiple concurrent rentals, returns, and discards must not corrupt the idle queue, the
-semaphore count, the `_currentCount` counter, or the `_disposed` flag. A lost
-`SemaphoreSlim.Release()` would deadlock the pool; a duplicate increment would leak
-channels; a torn read of `_disposed` would race with `DisposeAsync`.
+## Channel pools — `ChannelPool`
 
-**Verification**: Inspected `ChannelPool.cs`:
-- `SemaphoreSlim _semaphore` (sized `MaxSize, MaxSize`) gates concurrent rentals. Each
-  `RentAsync` does `await _semaphore.WaitAsync(cts)`; each `Return`/`Discard` does
-  `_semaphore.Release()`. The semaphore provides backpressure when all channels are in
-  use and guarantees the count can never exceed `MaxSize`.
-- `ConcurrentQueue<IChannel> _available` holds idle channels. `TryDequeue`/`Enqueue`
-  are lock-free and concurrent-safe; the `while (_available.TryDequeue(...))` loop in
-  `RentAsync` discards closed channels lazily on next rental.
-- `Interlocked.Increment/Decrement(ref _currentCount)` tracks total channels (idle +
-  rented) for diagnostics; never read with `++`/`--`.
-- `Interlocked.Exchange(ref _disposed, 1)` in `DisposeAsync` guarantees single-execution
-  semantics even if called concurrently (matches the pattern in `ManagedConnection`).
-  `IsDisposed` uses `Volatile.Read(ref _disposed)`.
-- `Return`/`Discard` swallow `ObjectDisposedException` from `_semaphore.Release()` so
-  returning a channel after pool disposal doesn't crash the caller.
-- `RentAsync` releases the semaphore on `catch` so a failed `CreateChannelAsync` doesn't
-  leak a permit.
+Each **producer** has its own pool (`ChannelPoolSize`), and each **consumer with retries enabled** has one for its retry publishes (sized to its handler concurrency, between 1 and 8).
 
-**Result**: No race. The pool is safe for concurrent use. No plain `lock` in the hot
-path; only lock-free primitives.
+- `SemaphoreSlim(maxSize, maxSize)` bounds the number of rented channels. When all are rented, callers wait; that wait is the backpressure.
+- Idle channels live in a `ConcurrentQueue`. `RentAsync` discards closed idle channels and opens a new one when none is usable.
+- Every successful `RentAsync` is matched by exactly one `Return` (healthy channel) or `Discard` (closed, or in an unknown state after a confirm timeout). Both release the semaphore. A failed `RentAsync` releases its permit itself.
+- `_currentCount` and `_disposed` are only accessed through `Interlocked` / `Volatile`. There is no `lock` on the rent/return path.
+- `DisposeAsync` is single-shot. It waits for rented channels to come back for a bounded time (10 s by default, 2 s for retry pools), then closes the idle channels. Channels still rented when it gives up are not closed by the pool, because their renter is still using them.
 
-### C3: ManagedConnection — Reconnect Loop — OK
+---
 
-**Concern**: The reconnect loop must (a) be the only recovery path, (b) atomically swap
-`_connection` and `_connectionClosedTcs` together, and (c) avoid racing with itself if
-two shutdowns fire back-to-back. A duplicate recovery loop would open two TCP
-connections and confuse `IsConnected`.
+## Retry publishing — `RetryQueuePublisher`
 
-**Verification**: Inspected `ManagedConnection.cs`:
-- `Start()` uses `Interlocked.CompareExchange(ref _started, 1, 0)` — only one loop can
-  be started; a second call throws `InvalidOperationException`.
-- `ConnectionLoopAsync` is the single recovery loop. After `TryConnectAsync`, it
-  awaits `_connectionClosedTcs.Task` (a `TaskCompletionSource<bool>` with
-  `RunContinuationsAsynchronously`) to be completed by `OnConnectionShutdown`.
-- `TryConnectAsync` and `OnConnectionShutdown` both swap `_connection` and
-  `_connectionClosedTcs` under `lock (_lock)`. `OnConnectionShutdown` only nulls
-  `_connection` if `ReferenceEquals(sender, _connection)` — protecting against a
-  stale shutdown handler from a previous (already-replaced) connection.
-- `ConnectionFactory.AutomaticRecoveryEnabled = false` and `TopologyRecoveryEnabled = false`
-  — the RabbitMQ client does NOT run its own recovery; `ManagedConnection` is the sole
-  recovery path. (This is the key invariant: enabling `AutomaticRecoveryEnabled` would
-  create a duplicate recovery race.)
-- `BackoffDelayAsync` runs on the loop token, so dispose cancels it cleanly.
+- A failed message is republished to `{queue}.retry.{N}s` on a pooled channel with **publisher confirms** and **`mandatory: true`**, waiting at most 30 s for the confirm.
+- The consumer ACKs the original **only if the confirm arrives**. A NACK, a return (missing retry queue), a timeout or a channel error makes it NACK the original with requeue instead. The message is therefore never lost between the two queues; at worst it is processed again.
+- After a confirm, a NACK or a return, the channel goes back to the pool. After a timeout or any other exception it is discarded, because its confirm state is unknown.
 
-**Result**: No race. Single recovery loop, atomic swap, no duplicate paths.
+---
 
-### C4: EventUpgraderRegistry — Immutability — OK
+## Single-message consumer — `NamedRabbitConsumer`
 
-**Concern**: The registry is a singleton resolved from DI and read concurrently from
-every consumer dispatch. If the internal dictionaries were mutated after construction,
-a concurrent reader could see a partially-built chain or a torn `UpgraderEntry[]`.
+### Dispatch
 
-**Verification**: Inspected `EventUpgraderRegistry.cs`:
-- All four internal dictionaries (`_chains`, `_versionTypes`, `_highestVersions`,
-  `_latestTypes`) are `readonly` and populated only in the constructor. No public or
-  internal method writes to them after `ctor` returns.
-- All public methods (`GetHighestVersion`, `GetLatestType`, `GetTypeForVersion`,
-  `Upgrade`) are pure reads. `Upgrade` iterates the immutable `UpgraderEntry[]` chain
-  and resolves the upgrader instance from the scoped `IServiceProvider` (per-message
-  scope), so no shared mutable state is touched during dispatch.
-- The constructor validates that the chain starts at version 1 (`sorted[0].FromVersion == 1`)
-  and is continuous (each upgrader's `ToVersion` matches the next one's `FromVersion`).
-  Without the v1 check, a chain registered as V2→V3 would silently deserialize V1
-  messages as the latest type (default field values → data corruption). The
-  constructor throws `InvalidOperationException` if any event's chain does not start
-  at v1 or has a gap.
+- Each consumer owns one channel at a time, created in its run loop. If the channel or connection fails, the loop waits 2 s and creates a new channel.
+- Parallelism comes from the driver's **`consumerDispatchConcurrency`**: `MaxConcurrentHandlers` if set, otherwise `PrefetchCount`. When `MaxConcurrentHandlers > 0`, a `SemaphoreSlim` of the same size also guards the handler section.
+- **ACK/NACK always use the channel that delivered the message.** That channel is captured in the delivery callback and passed down to every ACK/NACK call. A delivery tag is only valid on its own channel, so a channel field that may have been replaced must never be used.
+- An `Interlocked` in-flight counter tracks callbacks that have not returned yet. The shutdown drain uses it.
 
-**Result**: Thread-safe by immutability. The chain validation in the constructor
-protects against "silent data corruption" bugs that race conditions can produce.
+### Shutdown sequence
 
-### C5: HandlerTypeRegistry — Immutability — OK
+When the host's stopping token fires:
 
-**Concern**: The `HandlerTypeRegistry` is a singleton resolved from DI and read on
-every message dispatch. A mutable dictionary would be unsafe under concurrent reads
-+ writes.
+1. `_isShuttingDown` is set; from then on, an `OperationCanceledException` from a handler means "requeue", not "failure".
+2. `BasicCancelAsync` (bounded to 5 s) stops new deliveries.
+3. In-flight handlers get `ShutdownDrainTimeout` to finish, checked every 100 ms. Handlers that finish are ACKed normally.
+4. If the timeout expires, the handlers' `CancellationToken` is cancelled. Each pending handler wait is then abandoned and its message NACKed with requeue, without counting a retry. A 500 ms grace period lets those NACKs go out.
+5. Only then does the run loop close the channel.
 
-**Verification**: Inspected `HandlerTypeRegistry.cs`. The internal dictionary mapping
-`(EventName, ...)` to handler types is populated in the constructor and never mutated
-after. All public lookup methods are pure reads. Same pattern as
-`EventUpgraderRegistry` — thread-safety by post-construction immutability.
+`DisposeAsync` cancels the handler token again, waits at most 3 s for in-flight callbacks to send their NACKs, then disposes the retry pool, the limiter and the token source.
 
-**Result**: No race. Read-only after `ctor`.
+---
 
-### C6: RabbitMqActivitySource — Static Mutable State — OK in practice (documented limitation)
+## Batch consumer — `NamedBatchRabbitConsumer`
 
-**Concern**: `RabbitMqActivitySource` is a `static` class with a mutable `Source`
-property (replaced in `Initialize`). C# does not guarantee atomicity of static
-property reads without `volatile` or a lock, so a reader calling `RabbitMqActivitySource.Source`
-*immediately* after `Initialize` could in principle see the old `ActivitySource`.
+### Pipeline
 
-**Verification**: Inspected `RabbitMqActivitySource.cs`:
-- `Initialize(string name)` uses a `lock (Lock)` double-checked pattern:
-  ```csharp
-  if (IsInitialized) return;
-  lock (Lock) { if (IsInitialized) return;
-      SourceName = name; Source = new ActivitySource(name, "1.0.0"); IsInitialized = true; }
-  ```
-- The `Source` property itself is not `volatile`, but the writes happen under a `lock`,
-  and the readers (publishers/consumers) only resolve `Source` on the first
-  publish/consume — which always happens after `Build()` has returned, i.e., after
-  `Initialize` finished and the lock was released. A released `lock` issues a memory
-  barrier, so subsequent reads from any thread observe the new `Source`.
-- **Note on the static-singleton limitation**: `Initialize` is a no-op on second and
-  subsequent calls (the first name wins). This is deliberate — RabbitFlow uses a static
-  `ActivitySource`, so only one instrumentation name per process is supported for
-  tracing. This affects test and multi-tenant scenarios that register two RabbitFlow
-  instances with different instrumentation names in the same process: the second
-  `InstrumentationName` is silently ignored for tracing (metrics are per-DI-container
-  and not affected). The `RabbitMqActivitySource` XML doc-comment documents this
-  limitation. The documentation-only approach (no throw) is the correct trade-off:
-  it preserves legitimate multi-tenant test scenarios where multiple
-  `IServiceCollection` instances use different instrumentation names in the same
-  process.
+- Delivery callbacks validate and deserialize each message, then write it to a **bounded `Channel<T>`** (capacity `PrefetchCount × 2`, `Wait` when full). Many callbacks write; **one dispatch loop reads**.
+- The message body is **copied** before it is buffered. `RabbitMQ.Client` reuses the delivery memory after the callback returns, while the buffered copy is needed later for retry publishing and `IDeadLetterHandler`.
+- The dispatch loop flushes a batch on `BatchSize`, on `BatchTimeoutMs` after the first message, or immediately once the buffer is completed. Each flush is split by event type; each group is dispatched to its handler in its own DI scope.
+- ACK/NACK are sent **one delivery tag at a time** (`multiple: false`) on the delivering channel. `multiple: true` would also settle lower tags that are still buffered or belong to another group.
 
-**Result**: OK in practice — the `ActivitySource` is always resolved after `Build()`,
-so the lack of `volatile` on the property is not observable. The static-singleton
-limitation is documented (not enforced with a throw) to avoid breaking multi-tenant
-test scenarios.
+### Two cancellation signals
 
-### C7: RabbitConnectionRegistry — StartAll Idempotency — OK
+| Signal | When it fires | Effect |
+|---|---|---|
+| Host stopping token | Shutdown starts | Stop buffering and cancel the consumer |
+| `_handlerCts` (handler token) | Only when the drain timeout expires, or on dispose | Abandon the in-flight batch |
 
-**Concern**: `StartAll` is called by `ConnectionInitializerHostedService` at startup.
-If it were called twice (e.g., a misconfigured host or a manual restart), each
-`ManagedConnection.Start()` would throw `InvalidOperationException` ("already
-started") — but the second `StartAll` call would have already advanced the registry's
-`_started` flag, leaving the registry in an inconsistent state where subsequent calls
-silently no-op while the inner connections are broken.
+The handler token is deliberately separate, so a batch already being processed is not interrupted the moment shutdown begins.
 
-**Verification**: Inspected `RabbitConnectionRegistry.cs`:
-- `StartAll` opens with
-  `if (Interlocked.CompareExchange(ref _started, 1, 0) != 0) throw new InvalidOperationException(...)`.
-  This makes `StartAll` strictly idempotent *at the registry level*: the second call
-  throws before touching any `ManagedConnection`, so no partial-start state is left
-  behind.
-- `DisposeAsync` uses `Interlocked.Exchange(ref _disposed, 1)` for the same
-  single-execution guarantee.
+### Shutdown sequence
 
-**Result**: No race. `StartAll` is one-shot at the registry level.
+1. `_isShuttingDown` is set.
+2. **The buffer is completed first.** This releases any delivery callback blocked on a full buffer. Deliveries that arrive afterwards are NACKed with requeue.
+3. `BasicCancelAsync` (bounded to 5 s) stops new deliveries. Completing the buffer before cancelling avoids waiting on a callback that is itself waiting for buffer space.
+4. The dispatch loop flushes what it holds as a final batch and exits. It gets `ShutdownDrainTimeout` to do so.
+5. If the timeout expires, `_handlerCts` is cancelled: the in-flight batch is abandoned and NACKed with requeue, and anything still buffered is NACKed with requeue. A 5 s grace period lets those NACKs go out.
+6. Only then is the channel closed.
 
-### C8: ManagedConnection.DisposeAsync — No Deadlock — OK
+If the channel closes on its own (broker restart, connection loss), the buffer is completed and the loop is awaited. The broker requeues every unacknowledged delivery.
 
-**Concern**: `DisposeAsync` calls `_loopCts.Cancel()` and then
-`Task.WhenAny(_loopTask, Task.Delay(2000))`. The `_loopTask` could be blocked on
-`await closedTcs.Task` (waiting for a natural shutdown) or on
-`await Task.Delay(backoff)`. If the loop never wakes from `closedTcs.Task`, `DisposeAsync`
-would hang — unless the cancel propagates into `closedTcs`.
+---
 
-**Verification**: Inspected `ConnectionLoopAsync` and `TryConnectAsync`:
-```csharp
-var closedTcs = _connectionClosedTcs;
-if (closedTcs is not null)
-{
-    await using var reg = cancellationToken.Register(() => closedTcs.TrySetCanceled())
-                                                .ConfigureAwait(false);
-    await closedTcs.Task.ConfigureAwait(false);
-}
-```
-The `cancellationToken.Register(() => closedTcs.TrySetCanceled())` callback is the key:
-when `DisposeAsync` calls `_loopCts.Cancel()`, the registered callback fires and
-`closedTcs.TrySetCanceled()` completes the TCS, so the `await closedTcs.Task` throws
-`OperationCanceledException`, which is caught by
-`catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }`
-— the loop exits cleanly.
-- For the `await Task.Delay(backoff, cancellationToken)` case, the cancel propagates
-  directly via the token.
-- `Task.WhenAny(_loopTask, Task.Delay(2000))` bounds the wait to 2 seconds regardless,
-  so even a hypothetical stuck loop wouldn't hang `DisposeAsync` indefinitely.
+## Handler scopes at shutdown — `HandlerExecution`
 
-**Result**: No deadlock. The CTS registration breaks the `closedTcs.Task` wait, the
-2-second `Task.WhenAny` is a hard backstop.
+Both consumers run each handler invocation through `HandlerExecution.WaitAsync`, which waits for the handler or the shutdown signal:
 
-### C9: ChannelPool.DisposeAsync — No Deadlock (10s latency) — OK
+- **Handler finishes first:** the caller keeps ownership of the DI scope and disposes it. A handler exception is rethrown to the caller.
+- **Shutdown wins:** the caller NACKs with requeue, and **ownership of the scope moves to a continuation**. That continuation disposes the scope only when the handler actually finishes, and observes its exception. A handler that ignores cancellation therefore never sees its `DbContext` or other scoped services disposed underneath it.
 
-**Concern**: `ChannelPool.DisposeAsync` does `for (var i = 0; i < MaxSize; i++)
-await _semaphore.WaitAsync(cts.Token)`. If a renter never returns its channel (e.g.,
-a publisher stuck on a network call), `DisposeAsync` would block forever acquiring all
-`MaxSize` permits.
+---
 
-**Verification**: Inspected `ChannelPool.DisposeAsync`:
-```csharp
-using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-for (var i = 0; i < MaxSize; i++)
-{
-    try { await _semaphore.WaitAsync(cts.Token).ConfigureAwait(false); }
-    catch (OperationCanceledException)
-    {
-        _logger.LogWarning("... timed out ({Acquired}/{Total} ...) Forcing closure.", i, MaxSize);
-        break;
-    }
-}
-```
-The `CancellationTokenSource(TimeSpan.FromSeconds(10))` is the hard backstop. If any
-renter hasn't returned within 10 seconds total, the loop breaks and proceeds to close
-the idle channels. The worst-case latency is 10 seconds — not a deadlock.
-- Rented channels are NOT closed by the pool (the renter still owns them); they're
-  left to be GC'd / closed by their own `finally` blocks. This is intentional — the
-  pool can't safely close a channel another thread is actively using.
+## Shutdown budget — `RabbitConsumerHostedService`
 
-**Result**: No deadlock. Worst case is a 10-second wait followed by a forced shutdown
-log and a (potentially) leaked channel that the renter is still using. Acceptable
-given the alternative (closing an in-use channel would corrupt the renter).
+- All consumers run concurrently and drain in parallel. Each consumer's `ShutdownDrainTimeout` is capped to `HostOptions.ShutdownTimeout − 10 s` (`ShutdownBudget`). The 10 s reserve covers the bounded steps after the drain (consumer cancel ≤ 5 s, abandon grace, channel close).
+- Consumers are disposed **in parallel**, and every wait during disposal is bounded (≤ 3 s in-flight NACKs, ≤ 2 s retry pool), so the total does not grow with the number of consumers.
+- `HostOptions` is read by reflection when available, so the library does not depend on the full `Microsoft.Extensions.Hosting` package. The fallback is 30 s.
 
-## Concurrency Invariants
+---
 
-Future contributors MUST preserve these invariants when modifying concurrent code:
+## Shared registries and diagnostics
 
-1. **`ManagedConnection`**: Only ONE reconnection loop per connection. `AutomaticRecoveryEnabled`
-   must remain `false` to avoid duplicate recovery paths. The `lock (_lock)` protects
-   `_connection` and `_connectionClosedTcs` swaps.
+- **`HandlerTypeRegistry` and `EventUpgraderRegistry`** are built once from DI registrations and never modified. All lookups are reads, so they are safe for any number of concurrent consumers.
+- **`RabbitMqActivitySource`** is static. `Initialize` uses a double-checked `lock`, and the first instrumentation name wins for the whole process. Readers only use `Source` after the host is built, which is after initialization. **`RabbitMqMetrics`** is a per-container singleton.
+- **`CompositeEventPublisher`** is a singleton holding one `NamedRabbitPublisher` per producer. Its dictionary is read-only after construction, and publishing is safe from any thread. Its disposal flag is a plain field. It is disposed with the DI container, after hosted services stop, so publishing concurrently with container disposal is not supported.
 
-2. **`ChannelPool`**: `SemaphoreSlim` gates concurrent rentals. `ConcurrentQueue` holds
-   idle channels. `Interlocked` protects `_currentCount` and `_disposed`. Never use a
-   plain `lock` in the rent/return hot path.
+---
 
-3. **`NamedRabbitConsumer` / `NamedBatchRabbitConsumer`**: ACK/NACK MUST use the concrete
-   `IChannel` from the `OnReceived` closure, NOT the `_currentChannel` field. The
-   `IChannel` parameter MUST be threaded through all method calls.
+## Invariants
 
-4. **`EventUpgraderRegistry` / `HandlerTypeRegistry`**: Immutable after construction.
-   Never mutate the internal dictionaries post-ctor. All public methods are read-only.
+Changes to concurrent code must preserve these:
 
-5. **`RabbitMqActivitySource`**: Static singleton. `Initialize` is a no-op after
-   the first call — the first name wins. Subsequent calls with the same name are no-ops;
-   calls with a different name are silently ignored for tracing (metrics are per-DI-container
-   and not affected). This limitation is documented in the XML doc-comment.
+1. **One recovery path per connection.** Keep `AutomaticRecoveryEnabled = false`, and swap `_connection` and its shutdown signal only under `lock (_lock)`.
+2. **Channel pools:** every `RentAsync` is matched by exactly one `Return` or `Discard`. Use no `lock` on the rent/return path, and never close a channel another caller has rented.
+3. **ACK/NACK use the channel that delivered the message**, passed as a parameter, never a field that may have been replaced. Batch consumers settle tags individually (`multiple: false`).
+4. **Never ACK a failed message before its retry copy is confirmed** by the broker.
+5. **Never touch `ea.Body` outside the delivery callback** without copying it first.
+6. **Batch shutdown order:** complete the buffer, then cancel the consumer, then drain, then abandon. The handler token must stay separate from the host stopping token.
+7. **A DI scope is disposed by exactly one owner,** and never while its handler is still running (`HandlerExecution`).
+8. **Every shutdown wait is bounded,** and the drain is capped by `ShutdownBudget` so the host's shutdown timeout is never exceeded.
+9. **Registries are immutable after construction.**
+10. **`RabbitMqActivitySource` is initialized once per process;** later names are ignored for tracing.
 
-6. **`RabbitConnectionRegistry.StartAll`**: Uses `Interlocked.CompareExchange` for
-   idempotency. Can only be called once.
+---
 
-7. **`CompositeEventPublisher`**: `ThrowIfDisposed()` must be called at the start of
-   every public publish method.
+## Tests that cover this design
 
-## Testing Concurrency
+| Area | Tests |
+|---|---|
+| Scope ownership at shutdown | `HandlerExecutionTests` (unit); `GracefulShutdownTests.ShutdownDrain_AbandonedHandler_KeepsScopedServicesAliveUntilItFinishes` |
+| Drain and requeue (single consumer) | `GracefulShutdownTests` |
+| Drain, requeue, body copy, per-type split (batch) | `BatchConsumerShutdownAndCorrectnessTests` |
+| Shutdown budget | `ShutdownBudgetTests`; `GracefulShutdownTests.ShutdownDrain_LongerThanHostShutdownTimeout_IsCappedSoStopFinishesInTime` |
+| Retry confirms and exact attempt counts | `RetryAndDeadLetterTests` |
+| Parallel handlers | `RetryAndDeadLetterTests.MaxConcurrentHandlers_AllowsConcurrentHandlerExecution` |
 
-Recommendations for stress tests to verify concurrency invariants:
-
-1. **Connection loss under load**: Start a consumer with `PrefetchCount=50`, consume
-   for 10 seconds, then kill the RabbitMQ broker. Verify:
-   - In-flight messages are requeued by the broker (at-least-once).
-   - The consumer reconnects and resumes consuming.
-   - No `ObjectDisposedException` or `AlreadyClosedException` propagates to the handler.
-
-2. **Channel pool exhaustion**: Configure a producer with `ChannelPoolSize=2`, then
-   publish 100 messages concurrently. Verify backpressure (some publishes await the
-   semaphore) and no channel leaks (all channels returned to the pool).
-
-3. **Concurrent dispose**: Start a consumer, then call `DisposeAsync` while messages
-   are in-flight. Verify:
-   - The `_shutdownCts` cancellation fires only in `DisposeAsync` (NOT on `stoppingToken`
-     — in-flight handlers must be allowed to complete during graceful shutdown).
-   - The `_shutdownCts` is properly disposed (no `CancellationTokenSource` leak).
-   - The `_concurrencyLimiter` (if configured via `MaxConcurrentHandlers > 0`) is disposed.
-   - In-flight handlers complete naturally; their ACKs target the correct channel.
-
-4. **Event upgrader chain**: Register a multi-step upgrade chain (V1→V2→V3→V4),
-   then consume 1000 V1 messages concurrently. Verify all are upgraded to V4 without
-   race conditions on the registry (it's immutable, so this should pass).
-
-5. **Static ActivitySource multi-name**: In a test process, call `AddRabbitMQ` with
-   `InstrumentationName="A"`, then call `AddRabbitMQ` on a different
-   `IServiceCollection` with `InstrumentationName="B"`. Verify the second call does
-   NOT throw — the first name wins for tracing, and `RabbitMqMetrics.MeterName` for
-   each DI container reflects its own `InstrumentationName`.
+Not covered by automated tests: broker restarts or connection loss under load, and channel-pool exhaustion under heavy concurrency.

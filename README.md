@@ -1,114 +1,60 @@
+<h1 align="center">RedRabbit</h1>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dotnet/brand/main/logo/dotnet-logo.svg" alt="RabbitFlow Logo" width="100" height="100" />
-</p>
-<h1 align="center">RabbitFlow</h1>
-<p align="center">
-  <b>RabbitMQ client framework for .NET 8, 9, and 10 — multi-broker, channel pooling, batch consumer, event versioning, retry/DLQ, OpenTelemetry</b>
+  <b>Typed RabbitMQ publishing and consuming for .NET 8, 9 and 10 — built on RabbitMQ.Client 7, wired through dependency injection and hosted services.</b>
 </p>
 
 <p align="center">
-  <a href="#-features">Features</a> •
-  <a href="#-architecture">Architecture</a> •
-  <a href="#-installation">Installation</a> •
-  <a href="#-quick-start">Quick Start</a> •
-  <a href="#-advanced-capabilities">Advanced Capabilities</a> •
-  <a href="#-multi-broker-support">Multi-Broker</a> •
-  <a href="#-resilience--dlq">Resilience &amp; DLQ</a> •
-  <a href="#-configuration-reference">Configuration</a> •
-  <a href="#-observability--metrics">Metrics</a> •
-  <a href="STATUS.md">Project Status</a>
+  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET 8 | 9 | 10" /></a>
+  <a href="https://www.nuget.org/packages/RedRabbit"><img src="https://img.shields.io/nuget/vpre/RedRabbit?style=for-the-badge&logo=nuget&color=004880" alt="NuGet" /></a>
+  <a href="https://github.com/rojo1585/RedRabbit/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
 </p>
 
-<p align="center">
-  <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-512BD4?style=for-the-badge&logo=dotnet&logoColor=white" alt=".NET Support" /></a>
-  <a href="https://www.nuget.org/packages/RabbitFlow"><img src="https://img.shields.io/nuget/v/RabbitFlow?style=for-the-badge&logo=nuget&color=004880" alt="NuGet Version" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="License: MIT" /></a>
-  <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Enabled-008080?style=for-the-badge&logo=opentelemetry&logoColor=white" alt="OpenTelemetry Ready" /></a>
-</p>
+> **Status: pre-release (`0.x`).** The API may still change before 1.0. It is ready for a pilot in a non-critical service; read the [project status](https://github.com/rojo1585/RedRabbit/blob/main/STATUS.md) for current limitations before adopting it.
 
 ---
 
-> **📋 Project Status:** RabbitFlow is **pre-1.0** (active development). It is suitable for **pilot deployments** in non-critical services. See [STATUS.md](STATUS.md) for known limitations, technical debt, and the adoption recommendation.
+## What it is
 
-## ⚡ Features
+RedRabbit is a thin, opinionated layer over `RabbitMQ.Client` 7 for applications built on the .NET generic host (ASP.NET Core, worker services). You describe connections, producers and consumers in configuration, implement handler interfaces, and RedRabbit takes care of:
 
-| Feature | Description |
-|---|---|
-| 🌐 **Multi-Broker Support** | Connect to multiple RabbitMQ brokers, clusters, or vhosts simultaneously within a single app. Each producer and consumer binds to a named connection. |
-| ⚡ **Channel Pooling** | Producer channel reuse using `SemaphoreSlim` backpressure — eliminates channel-per-publish overhead. |
-| 📦 **Batch Consumer** | Buffer high-volume messages in-memory and execute bulk processing with size/timeout triggers. |
-| 🔄 **Event Versioning** | Transparently upgrade legacy event schemas to latest contracts via `IEventUpgrader<TFrom, TTo>` chains. Cycles, downgrades, and gaps are rejected at startup. |
-| 🛡️ **Resilience & DLQ** | Client-side retry with configurable delays, automatic Dead-Letter Queue (DLQ) topology setup, and poison-message protection. One NACK = one copy (no amplification). |
-| 📊 **OpenTelemetry** | Distributed tracing (`ActivitySource`) and metrics (`Meter`) with W3C traceparent propagation. |
-| 🩺 **Health Checks** | ASP.NET Core health check integration for individual connections and aggregate cluster health. |
-| ✅ **Fail-Fast Validation** | `IValidateOptions<T>` + `ValidateOnStart()` validates all configuration bounds at startup — no silent hangs in runtime. |
+- **Publishing** typed events with publisher confirms, a per-producer channel pool and unroutable-message detection.
+- **Consuming** in hosted services, one DI scope per message (or per batch), with configurable concurrency.
+- **Retries and dead-lettering** through delay queues and a dead-letter queue it declares for you.
+- **Event versioning**: older event versions are upgraded to the version your handler expects.
+- **Graceful shutdown**: in-flight work gets a drain window that fits inside the host's shutdown timeout.
+- **Reconnection** with exponential backoff, **TLS** (including private CAs), **health checks** and **OpenTelemetry** traces and metrics.
 
----
+## What it is not
 
-## 🏗️ Architecture
-
-```text
-Publisher App                      RabbitMQ Broker                     Consumer App
-┌─────────────────┐             ┌─────────────────────┐             ┌─────────────────┐
-│ Publisher       │             │ RabbitMQ Exchange   │             │ Single Consumer │
-│ Service         │             └──────────┬──────────┘             │  OrderCreated   │
-└────────┬────────┘                        │                        └────────▲────────┘
-         │ Rent Channel                    │ Route                           │ Consume
-         ▼                                 ▼                                 │
-┌─────────────────┐             ┌─────────────────────┐             ┌────────┴────────┐
-│ Channel Pool    │─Publish─────► Queue:              ├────────────►│ Buffer /        │
-└─────────────────┘ Message     │ orders.created      │             │ Dispatch        │
-                                └──────────┬──────────┘             └─────────────────┘
-                                           │
-                                           │ On failure: publish to retry queue
-                                           ▼
-                                ┌─────────────────────┐             ┌─────────────────┐
-                                │ Retry Queue TTL     ├────────────►│ Batch Consumer  │
-                                └──────────┬──────────┘             │  Notification   │
-                                           │ TTL expires →          └─────────────────┘
-                                           │ re-deliver
-                                           ▼
-                                ┌─────────────────────┐
-                                │ Dead-Letter Queue   │ (Retries exhausted / NACK)
-                                └─────────────────────┘
-```
-
-### Resilience Flow (Client-Side Retry, No Message Amplification):
-1. **Handler fails** → Consumer publishes to the appropriate retry queue (via default exchange) and ACKs the original delivery.
-2. **Retry queue TTL expires** → Broker dead-letters back to the main exchange → Message re-delivered to the main queue.
-3. **Retries exhausted** → Consumer NACKs with `requeue=false` → Broker dead-letters via `x-dead-letter-exchange` (a direct DLX bound to the DLQ with routing key `"dead"`).
-4. **Poison message** (deserialize/upgrade throws) → Same retry/DLQ flow via top-level `try/catch` in `OnMessageReceived`.
+- **Not a service bus.** No sagas, request/response, scheduling, outbox or inbox.
+- **Not exactly-once.** Delivery is *at-least-once*: handlers must be idempotent (see [Delivery guarantees](#delivery-guarantees)).
+- **Not transport-agnostic.** It is RabbitMQ-only, on AMQP 0-9-1.
+- **Not interoperable by default.** Messages are wrapped in a RedRabbit JSON envelope and rely on RedRabbit headers. Producers and consumers on the other side are expected to use RedRabbit too (or follow the [wire format](#wire-format)).
 
 ---
 
-## 📦 Installation
+## Installation
 
-Install via .NET CLI:
 ```bash
-dotnet add package RabbitFlow
+dotnet add package RedRabbit --prerelease
 ```
 
-Or Package Manager Console:
-```powershell
-Install-Package RabbitFlow
-```
+Requirements: .NET 8, 9 or 10 and the generic host (`Microsoft.Extensions.Hosting`). Integration tests run against RabbitMQ 3.13.
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
-### 1️⃣ Configuration (`appsettings.json`)
+### 1. Configuration (`appsettings.json`)
+
 ```json
 {
   "RabbitMQ": {
     "Connections": {
       "main": {
-        "Name": "main",
         "HostName": "localhost",
-        "Port": 5672,
         "UserName": "guest",
-        "Password": "guest",
-        "VirtualHost": "/"
+        "Password": "guest"
       }
     },
     "Producers": [
@@ -116,9 +62,7 @@ Install-Package RabbitFlow
         "ServiceKey": "orders",
         "ConnectionName": "main",
         "ExchangeName": "orders",
-        "ExchangeType": "direct",
-        "RoutingKey": "order-created",
-        "ChannelPoolSize": 4
+        "RoutingKey": "order-created"
       }
     ],
     "Consumers": [
@@ -127,478 +71,447 @@ Install-Package RabbitFlow
         "ConnectionName": "main",
         "ExchangeName": "orders",
         "QueueName": "orders.created",
-        "RoutingKey": "order-created",
-        "PrefetchCount": 10,
-        "MaxRetries": 3
+        "RoutingKey": "order-created"
       }
     ]
   }
 }
 ```
-> **Note:** The `Name` field in each connection must match its dictionary key (`"main"` in the example above). This is validated at startup.
 
-### 2️⃣ Dependency Injection (`Program.cs`)
+The connection name is the dictionary key (`"main"`). Configuration is validated at startup; invalid settings stop the host with an `OptionsValidationException` listing every problem.
+
+### 2. Registration (`Program.cs`)
+
 ```csharp
-using RabbitFlow.Abstractions;
-using RabbitFlow.Diagnostics;
+using RedRabbit.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Register RabbitMQ Core Services (call ONCE — see Multi-Broker section for multiple connections)
-builder.Services.AddRabbitMQ(builder.Configuration);
-
-// Register Consumer Handlers
-builder.Services.AddRabbitHandler<OrderCreatedHandler>("orders-consumer");
-
-// Configure OpenTelemetry (Optional)
-builder.Services.AddOpenTelemetry()
-    .WithTracing(t => t.AddSource(RabbitMqActivitySource.SourceName))
-    .WithMetrics(m => m.AddMeter(RabbitMqMetrics.MeterName));
+builder.Services.AddRabbitMQ(builder.Configuration);                         // reads the "RabbitMQ" section
+builder.Services.AddRabbitHandler<OrderCreatedHandler>("orders-consumer");   // binds a handler to a consumer
 
 var app = builder.Build();
 app.Run();
 ```
 
-### 3️⃣ Publishing Messages
+`AddRabbitMQ` can be called only once per service collection; several brokers are configured as several entries under `Connections`.
+
+### 3. The event
+
 ```csharp
-using RabbitFlow.Abstractions;
+using RedRabbit.Diagnostics;
 
-public record OrderCreatedEvent : IIntegrationEvent
-{
-    public Guid OrderId { get; init; }
-    public string CustomerEmail { get; init; } = string.Empty;
-}
+[EventVersion("order-created", 1)]
+public sealed record OrderCreated(Guid OrderId, string CustomerEmail);
+```
 
-public class OrderService(IEventPublisher publisher)
+`[EventVersion]` gives the event a stable name that travels in the `x-event-type` header. Without it, the type's full name (`Namespace.OrderCreated`) is used, which only works if publisher and consumer share the same type. **Use the attribute for events exchanged between services.**
+
+### 4. Publishing
+
+```csharp
+using RedRabbit.Abstractions;
+
+public sealed class OrderService(IEventPublisher publisher)
 {
-    public async Task CreateOrderAsync(Guid orderId, string email)
-    {
-        // With a single producer registered, use the parameterless overload:
-        await publisher.PublishAsync(new OrderCreatedEvent
-        {
-            OrderId = orderId,
-            CustomerEmail = email
-        });
-    }
+    public Task CreateOrderAsync(Guid orderId, string email, CancellationToken ct)
+        => publisher.PublishAsync(new OrderCreated(orderId, email), cancellationToken: ct);
 }
 ```
-> Multiple producers? Use `publisher.PublishAsync("producer-key", @event)` to target a specific one. Without a key, the call throws `AmbiguousProducerException` when 2+ producers are registered.
 
-### 4️⃣ Consuming Messages
+### 5. Consuming
+
 ```csharp
-using RabbitFlow.Abstractions;
+using RedRabbit.Abstractions;
 
-public class OrderCreatedHandler(ILogger<OrderCreatedHandler> logger) : IRabbitHandler<OrderCreatedEvent>
+public sealed class OrderCreatedHandler(ILogger<OrderCreatedHandler> logger) : IRabbitHandler<OrderCreated>
 {
-    // Must match a Consumer's ServiceKey in configuration
-    public string ConsumerKey => "orders-consumer";
-
-    public Task HandleAsync(OrderCreatedEvent @event, MessageContext context)
+    public Task HandleAsync(OrderCreated @event, MessageContext context, CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "Processing Order {OrderId} | CorrelationId: {CorrelationId}",
-            @event.OrderId, 
-            context.CorrelationId);
-
+        logger.LogInformation("Order {OrderId} (correlation {CorrelationId}, retry {RetryCount})",
+            @event.OrderId, context.CorrelationId, context.RetryCount);
         return Task.CompletedTask;
     }
 }
 ```
 
----
-
-## 🌐 Multi-Broker Support
-
-RabbitFlow connects to multiple RabbitMQ brokers, clusters, or vhosts in a single application. Each connection is a named entry in the `Connections` dictionary, and each producer/consumer references its connection by name.
-
-> ⚠️ **Important:** `AddRabbitMQ` must be called **exactly once** per `IServiceCollection`. A second call throws `InvalidOperationException` to prevent silent configuration loss. Multi-broker is achieved by adding multiple entries to `Connections`, `Producers`, and `Consumers` in a single `AddRabbitMQ` call.
-
-### Example: Two brokers (orders on broker A, notifications on broker B)
-```csharp
-builder.Services.AddRabbitMQ(settings =>
-{
-    // ── Broker A Connection ──
-    settings.Connections["orders-broker"] = new RabbitConnectionOptions
-    {
-        Name = "orders-broker",
-        HostName = "broker-a.example.com",
-        UserName = "guest",
-        Password = "guest"
-    };
-
-    // ── Broker B Connection ──
-    settings.Connections["notifications-broker"] = new RabbitConnectionOptions
-    {
-        Name = "notifications-broker",
-        HostName = "broker-b.example.com",
-        UserName = "guest",
-        Password = "guest"
-    };
-
-    // ── Producer on broker A ──
-    settings.Producers.Add(new RabbitProducerOptions
-    {
-        ServiceKey = "orders-producer",
-        ConnectionName = "orders-broker",      // ← references the connection above
-        ExchangeName = "orders",
-        RoutingKey = "order-created",
-        ChannelPoolSize = 4
-    });
-
-    // ── Producer on broker B ──
-    settings.Producers.Add(new RabbitProducerOptions
-    {
-        ServiceKey = "notifications-producer",
-        ConnectionName = "notifications-broker",
-        ExchangeName = "notifications",
-        RoutingKey = "notification-pending",
-        ChannelPoolSize = 4
-    });
-
-    // ── Consumer on broker A ──
-    settings.Consumers.Add(new RabbitConsumerOptions
-    {
-        ServiceKey = "orders-consumer",
-        ConnectionName = "orders-broker",
-        ExchangeName = "orders",
-        QueueName = "orders.created",
-        RoutingKey = "order-created",
-        PrefetchCount = 10,
-        MaxRetries = 3
-    });
-
-    // ── Consumer on broker B ──
-    settings.Consumers.Add(new RabbitConsumerOptions
-    {
-        ServiceKey = "notifications-consumer",
-        ConnectionName = "notifications-broker",
-        ExchangeName = "notifications",
-        QueueName = "notifications.pending",
-        RoutingKey = "notification-pending",
-        PrefetchCount = 50,
-        MaxRetries = 3
-    });
-});
-
-// ── Register handlers for each consumer ──
-builder.Services.AddRabbitHandler<OrderCreatedHandler>("orders-consumer");
-builder.Services.AddRabbitHandler<NotificationHandler>("notifications-consumer");
-```
-
-### Publishing to a specific broker
-When multiple producers are registered, use the keyed overload:
-```csharp
-public class OrderService(IEventPublisher publisher)
-{
-    public Task CreateOrderAsync(Guid orderId, string email)
-        => publisher.PublishAsync("orders-producer", new OrderCreatedEvent { OrderId = orderId, CustomerEmail = email });
-}
-```
+Returning normally ACKs the message. Throwing sends it through [retries and dead-lettering](#retries-and-dead-lettering).
 
 ---
 
-## 💎 Advanced Capabilities
+## Publishing
 
-### 📥 Batch Consumer
-Process high-throughput workloads (e.g., bulk database inserts) by accumulating messages in-memory.
+`IEventPublisher` and `IBatchEventPublisher` are singletons.
 
-> 💡 **Tip:** Batch processing reduces I/O bottlenecks when handlers perform bulk operations (e.g., `AddRangeAsync`, `ExecuteAsync`). The exact throughput threshold depends on your workload and broker capacity — benchmark with your own data before committing to batch mode.
+```csharp
+await publisher.PublishAsync(evt);                                                  // the only producer
+await publisher.PublishAsync(evt, new PublishOptions(ProducerKey: "orders"));      // a specific producer
+await publisher.PublishAsync(evt, new PublishOptions(RoutingKey: "order.eu"));     // override the routing key
+await publisher.PublishAsync(evt, new PublishOptions(CorrelationId: requestId));   // keep a correlation id
+```
 
-`appsettings.json`:
+- **Choosing a producer.** Without `ProducerKey` there must be exactly one producer; otherwise `AmbiguousProducerException` is thrown. An unknown key throws `ProducerNotFoundException`.
+- **Publisher confirms** (`EnablePublisherConfirms`, on by default). `PublishAsync` completes only after the broker confirms the message. A broker NACK throws `PublisherNackException`; no confirm within `PublishConfirmTimeoutMs` throws `PublisherConfirmTimeoutException`.
+- **Unroutable messages** (`Mandatory`, on by default). If no queue is bound for the routing key, `PublisherNackException` is thrown with `IsReturn = true`. This detection requires publisher confirms; with confirms disabled, returned messages are silently dropped.
+- **Channel pool** (`ChannelPoolSize`, default 4). Publishes rent a channel from a per-producer pool; when every channel is in use, callers wait. `0` opens and closes a channel per publish.
+- **Persistence** (`Persistent`, on by default) marks messages as persistent (delivery mode 2).
+- **Topology.** With `AutoDeclareTopology` (default), the producer declares its exchange as durable before publishing.
+- **Broker unavailable.** A publish waits up to 30 seconds for a connection, then throws `TimeoutException`.
+
+### Batch publishing
+
+```csharp
+await batchPublisher.PublishBatchAsync(events, new PublishOptions(ProducerKey: "orders"));
+```
+
+Messages are published one after another on a single channel, each with its own confirm. **The batch is not atomic**: if message N fails, messages 1..N-1 are already published and the exception surfaces to the caller. `PublishOptions.CorrelationId` is not applied to batches; every message gets its own correlation id.
+
+---
+
+## Consuming
+
+Each consumer in configuration runs in a hosted service. It declares its topology (unless `AutoDeclareTopology` is `false`), consumes with manual acknowledgements and dispatches each message to the handler registered for its event type.
+
+- **Handlers** are resolved from a **new DI scope per message**, so they can depend on scoped services such as a `DbContext`. Register them with `AddRabbitHandler<THandler>(consumerKey)`. One handler type per event type; a consumer can have handlers for several event types.
+- **Concurrency.** Up to `MaxConcurrentHandlers` messages are processed in parallel. With the default `0`, the limit is `PrefetchCount` (default 10). Set `PrefetchCount = 1` (or `MaxConcurrentHandlers = 1`) to process messages one at a time.
+- **Ordering is not guaranteed** with parallel processing or retries.
+- **`MessageContext`** exposes the correlation id, message id, publish time, publisher name, routing key, exchange, `Redelivered`, the retry count and the message headers (headers starting with `x-` are excluded).
+- **`CancellationToken`** passed to the handler is cancelled only if the shutdown drain timeout expires (see [Graceful shutdown](#graceful-shutdown)).
+
+### Batch consumer
+
 ```json
 {
-  "Consumers": [{
-    "ServiceKey": "notifications-batch",
-    "ConnectionName": "main",
-    "ExchangeName": "notifications",
-    "QueueName": "notifications.pending",
-    "RoutingKey": "#",
-    "EnableBatchConsumer": true,
-    "BatchSize": 50,
-    "BatchTimeoutMs": 3000,
-    "PrefetchCount": 100
-  }]
+  "ServiceKey": "notifications-batch",
+  "ConnectionName": "main",
+  "ExchangeName": "notifications",
+  "QueueName": "notifications.pending",
+  "RoutingKey": "notification",
+  "EnableBatchConsumer": true,
+  "BatchSize": 50,
+  "BatchTimeoutMs": 2000,
+  "PrefetchCount": 100
 }
 ```
 
-Implementation:
 ```csharp
 builder.Services.AddBatchRabbitHandler<NotificationBatchHandler>("notifications-batch");
 
-public class NotificationBatchHandler : IBatchRabbitHandler<NotificationEvent>
+public sealed class NotificationBatchHandler : IBatchRabbitHandler<NotificationRequested>
 {
-    public string ConsumerKey => "notifications-batch";
-
-    public async Task HandleBatchAsync(
-        IReadOnlyList<NotificationEvent> events,
-        IReadOnlyList<MessageContext> contexts)
-    {
-        // Bulk Operation (e.g., EF Core AddRangeAsync / Dapper ExecuteAsync)
-        await SaveNotificationsToDbAsync(events);
-    }
+    public Task HandleBatchAsync(IReadOnlyList<NotificationRequested> events,
+                                 IReadOnlyList<MessageContext> contexts,
+                                 CancellationToken cancellationToken)
+        => SaveAllAsync(events, cancellationToken);   // e.g. one bulk insert
 }
 ```
-> **Note:** Batch handler failures NACK all messages in the batch together. Each message is then individually re-published to the retry queue (or NACKed to the DLQ if retries are exhausted).
 
-### 🏊 Channel Pooling
-By default, each producer holds a managed pool of AMQP channels. Publishes rent a channel, execute the operation, and return it back to the pool.
-
-> ⚡ **Important:** Creating and destroying channels per publish is a significant throughput bottleneck in AMQP applications. Channel pooling reuses channels across publishes to avoid this overhead.
-
-**Configuration:**
-
-| Pool Size | Publisher Confirms | Behavior |
-|---|---|---|
-| **4** (default) | Enabled (default) | Balanced durability and throughput for most workloads |
-| **8** | Enabled | Higher concurrency for high-volume producers |
-| **4** | Disabled | Higher throughput when durability on publish is not required |
-| **0** | — | Channel-per-publish (no pooling; backward compatibility) |
-
-> ⚠️ **Note:** Specific throughput numbers (msg/s) depend heavily on broker hardware, network latency, message size, and payload serialization cost. The table above describes the **behavior** of each configuration; it does not promise specific msg/s figures. Benchmark with your own workload before sizing production capacity. See [STATUS.md](STATUS.md) for details.
-
-### 🔀 Event Versioning
-Upgrade historical message contracts without disrupting running production consumers.
-
-```csharp
-[EventVersion("OrderCreated", 1)]
-public record OrderCreatedV1(Guid OrderId, string Email);
-
-[EventVersion("OrderCreated", 2)]
-public record OrderCreatedV2(Guid OrderId, string Email, string Phone);
-
-// Upgrader definition
-public class OrderV1ToV2Upgrader : IEventUpgrader<OrderCreatedV1, OrderCreatedV2>
-{
-    public string EventName => "OrderCreated";
-    public int FromVersion => 1;
-    public int ToVersion => 2;
-
-    public OrderCreatedV2 Upgrade(OrderCreatedV1 source)
-        => new(source.OrderId, source.Email, Phone: "N/A");
-}
-
-// Registration
-builder.Services.AddEventUpgrader<OrderV1ToV2Upgrader>();
-```
-
-**Safety guarantees (validated at startup):**
-- ✅ **No cycles:** `ToVersion` must be strictly greater than `FromVersion`. Self-loops (V1→V1), downgrades (V3→V2), and cycles (V1→V2→V1) are rejected with `InvalidOperationException`.
-- ✅ **No gaps:** Each upgrader's `ToVersion` must match the next upgrader's `FromVersion`.
-- ✅ **Chain starts at v1:** The first upgrader's `FromVersion` must be `1`. Chains that start at a higher version (e.g., only `V2→V3` registered) are rejected — otherwise v1 messages would be silently deserialized as the latest version, causing field loss.
-- ✅ **Newer-than-highest rejected:** If a message arrives with a version higher than the highest registered (e.g., message is V5 but consumer only knows up to V3), `EventVersionNewerThanRegisteredException` is thrown and the message is routed to retry/DLQ via the poison-message handler — no silent field loss.
+- A batch is flushed when it reaches `BatchSize`, or `BatchTimeoutMs` after its first message arrives.
+- If a flush contains several event types, it is split into one batch per type, each sent to its own handler.
+- **All or nothing per batch:** success ACKs every message; an exception retries or dead-letters every message of the batch together.
+- Keep `PrefetchCount` ≥ `BatchSize`; otherwise batches never fill up and always flush on the timeout.
 
 ---
 
-## 🛡️ Resilience & DLQ
+## Retries and dead-lettering
 
-RabbitFlow provides client-side retry with automatic Dead-Letter Queue topology. This ensures one routing decision per failure (no message amplification) — the message is ACKed after being republished to a retry queue, or NACKed with `requeue=false` to dead-letter it.
+With the defaults (`EnableRetry = true`, `EnableDeadLetter = true`, `MaxRetries = 3`), a message whose handler throws is retried with a delay, and after the last attempt it is moved to a dead-letter queue.
 
-> **Note:** RabbitFlow guarantees **at-least-once** delivery (the broker may redeliver on reconnect or retry). Handlers must be idempotent. See [STATUS.md](STATUS.md) for the full list of delivery semantics and known limitations.
-
-### How It Works
 ```text
-Main Queue → handler fails
-   ├─ ShouldRetry=true  → publish to retry queue + ACK original
-   │                        │
-   │                        └─► retry queue (TTL) → expires → broker dead-letters → main exchange → main queue
-   │                        │
-   │                        └─► (x-death header updated; deliveryCount increments)
-   │
-   └─ ShouldRetry=false → NACK(requeue=false)
-                            │
-                            └─► broker dead-letters via x-dead-letter-exchange
-                            │
-                            └─► DLX (direct, routing key "dead") → DLQ (exactly one copy)
-                            │
-                            └─► IDeadLetterHandler invoked (notification only, no re-publish)
+attempt 1 fails ─► republished to {queue}.retry.0s   (confirmed) ─► ACK original
+                   └─ TTL expires ─► back to {queue}
+attempt 2 fails ─► republished to {queue}.retry.5s  ─► ...
+attempt 3 fails ─► NACK (no requeue) ─► broker dead-letters to {queue}.dlx ─► {queue}.dlq
+                                       └─► IDeadLetterHandler (optional notification)
 ```
 
-### Topology Declared Per Consumer
-| Resource | Type | Purpose |
+- `MaxRetries` is the total number of attempts, including the first. `RetryDelays` holds one delay per retry (default `0s, 5s, 30s`); it needs at least `MaxRetries - 1` entries.
+- The attempt count travels in the `redrabbit-delivery-count` header and is exposed as `MessageContext.RetryCount` (`0` on the first attempt).
+- A retry is ACKed only after the broker confirms the copy in the retry queue. If that publish fails, the original is NACKed with requeue, so the message is not lost (it is redelivered immediately, without counting an attempt).
+
+### What happens to each kind of failure
+
+| Situation | Outcome |
+|---|---|
+| Handler throws | Retried; dead-lettered after `MaxRetries` attempts |
+| Body cannot be deserialized | Dead-lettered immediately (no retries) |
+| Event version newer than any registered upgrader | Retried, then dead-lettered |
+| Missing `x-event-type` header, or no handler registered for the event type | Rejected without requeue → dead-lettered; logged as a warning |
+| Host shutting down before the handler finishes | Requeued without counting an attempt |
+| `EnableRetry = false` | Dead-lettered on the first failure |
+| `EnableDeadLetter = false` | Messages that would be dead-lettered are **discarded** |
+
+### Topology declared per consumer
+
+| Resource | Default name | Notes |
 |---|---|---|
-| `{QueueName}.dlx` | direct exchange | Receives dead-lettered messages from the main queue |
-| `{QueueName}.dlq` | durable queue | Final resting place; bound to DLX with routing key `"dead"` |
-| `{QueueName}.retry.0s` | durable queue, TTL=1ms | Immediate retry (delay=0) |
-| `{QueueName}.retry.5s` | durable queue, TTL=5000ms | Retry after 5s |
-| `{QueueName}.retry.30s` | durable queue, TTL=30000ms | Retry after 30s |
+| Main queue | `QueueName` | Durable, bound to `ExchangeName` with `RoutingKey`; dead-letters to the DLX |
+| Dead-letter exchange | `{QueueName}.dlx` | `direct` |
+| Dead-letter queue | `{QueueName}.dlq` | Durable, bound to the DLX with routing key `dead` |
+| Retry queues | `{QueueName}.retry.{N}s` | One per distinct delay; TTL = delay; dead-letter back to the main queue |
 
-> **Note:** Retry queues are NOT bound to the DLX. The client publishes directly to them via the default exchange. This prevents the exponential amplification bug that occurs with a fanout DLX bound to both DLQ and retry queues.
+The DLX/DLQ can be renamed or pointed at existing resources with the `DeadLetter` options (`AutoDeclare = false` only verifies that they exist).
 
-### Poison Message Protection
-If deserialization, event upgrade, or handler resolution throws (corrupt JSON, incompatible schema, upgrader exception), the top-level `try/catch` in `OnMessageReceived` catches it and routes the message through the same retry/DLQ flow. A single corrupt message cannot hang the consumer indefinitely.
-
-### Configuration
-```json
-{
-  "Consumers": [{
-    "ServiceKey": "orders-consumer",
-    "EnableDeadLetter": true,
-    "EnableRetry": true,
-    "MaxRetries": 3,
-    "RetryDelays": ["00:00:00", "00:00:05", "00:00:30"]
-  }]
-}
-```
-- **`MaxRetries`**: Maximum number of delivery attempts (default: `3`). The first delivery counts as attempt 1.
-- **`RetryDelays`**: One entry per retry attempt after the first. Must have at least `MaxRetries - 1` entries. Default: `["00:00:00", "00:00:05", "00:00:30"]`.
-
-### `IDeadLetterHandler` (Optional Notification)
-Register an `IDeadLetterHandler` to receive a callback when a message is dead-lettered (e.g., for alerting or audit). This is a notification only — the broker has already written the message to the DLQ.
+### Dead-letter notifications
 
 ```csharp
-public class AlertingDeadLetterHandler(ILogger<AlertingDeadLetterHandler> logger) : IDeadLetterHandler
+public sealed class AlertOnDeadLetter(ILogger<AlertOnDeadLetter> logger) : IDeadLetterHandler
 {
     public string ConsumerKey => "orders-consumer";
 
-    public Task HandleAsync(DeadLetterMessage message)
+    public Task HandleAsync(DeadLetterMessage message, CancellationToken cancellationToken = default)
     {
-        logger.LogError(
-            "Message dead-lettered: {Exchange}/{RoutingKey} | Exception: {ExceptionType}: {ExceptionMessage}",
-            message.OriginalExchange, message.OriginalRoutingKey,
-            message.ExceptionType, message.ExceptionMessage);
+        logger.LogError("Dead-lettered {MessageId}: {ExceptionType} {ExceptionMessage}",
+            message.MessageId, message.ExceptionType, message.ExceptionMessage);
         return Task.CompletedTask;
     }
 }
 
-// Registration (no extension method needed — register as IDeadLetterHandler)
-builder.Services.AddSingleton<IDeadLetterHandler, AlertingDeadLetterHandler>();
+builder.Services.AddScoped<IDeadLetterHandler, AlertOnDeadLetter>();
 ```
 
-### ⚠️ Exceptions
-RabbitFlow throws domain-specific exceptions (all inherit from `RabbitMqException`) so callers don't take a hard dependency on the `RabbitMQ.Client` driver:
+The handler is a notification only: by the time it runs, the message is already in the DLQ (or discarded). Exceptions it throws are logged and ignored. It is not invoked for messages rejected because of a missing header or a missing handler.
 
-| Exception | When Thrown |
+---
+
+## Event versioning
+
+When an event's contract changes, consumers can keep accepting the old version:
+
+```csharp
+[EventVersion("order-created", 1)]
+public sealed record OrderCreatedV1(Guid OrderId, string Email);
+
+[EventVersion("order-created", 2)]
+public sealed record OrderCreatedV2(Guid OrderId, string Email, string Channel);
+
+public sealed class OrderCreatedV1ToV2 : IEventUpgrader<OrderCreatedV1, OrderCreatedV2>
+{
+    public string EventName => "order-created";
+    public int FromVersion => 1;
+    public int ToVersion => 2;
+    public OrderCreatedV2 Upgrade(OrderCreatedV1 source) => new(source.OrderId, source.Email, Channel: "unknown");
+}
+
+builder.Services.AddEventUpgrader<OrderCreatedV1ToV2>();
+builder.Services.AddRabbitHandler<OrderCreatedHandler>("orders-consumer");   // handles OrderCreatedV2
+```
+
+- The publisher sends the version from `[EventVersion]` in the `x-event-version` header.
+- The consumer deserializes the message as the version it was sent with and runs the upgrader chain up to the latest registered version. This works for both single and batch consumers.
+- Chains are validated at startup: they must start at version 1, have no gaps, and every upgrader must go strictly forward.
+- A message newer than the latest registered version throws `EventVersionNewerThanRegisteredException` (it is retried and then dead-lettered).
+- Upgraders are resolved from DI, so they can have dependencies.
+
+---
+
+## Wire format
+
+Each message carries these headers:
+
+| Header | Content |
 |---|---|
-| `PublisherNackException` | Broker nacked or returned a published message (publisher confirms). Exposes `IsReturn`, `PublishSequenceNumber`. |
-| `PublisherConfirmTimeoutException` | Broker didn't confirm within `PublishConfirmTimeoutMs`. |
-| `ProducerNotFoundException` | `PublishAsync("key", ...)` referenced an unknown producer key. |
-| `AmbiguousProducerException` | `PublishAsync(event)` (no key) called with 0 or 2+ producers registered. |
-| `HandlerNotFoundException` | No handler registered for a consumed message's consumer key + event type. |
-| `ConnectionNotFoundException` | A producer/consumer referenced a connection name that doesn't exist. |
-| `EventVersionNewerThanRegisteredException` | Message arrived with a version higher than the highest registered upgrader. Exposes `ReceivedVersion`, `HighestRegisteredVersion`. |
-| `RabbitMqConfigurationException` | Configuration validation failed at startup. |
+| `x-event-type` | Event name (`[EventVersion]` name or type full name) — **required by consumers** |
+| `x-event-version` | Event version (default `1`) |
+| `x-correlation-id`, `x-message-id` | Correlation id (generated if not provided) and a unique message id |
+| `x-published-at`, `x-publisher-name` | Publish time (ISO 8601) and producer key |
+| `traceparent`, `tracestate` | W3C trace context, when tracing is enabled |
+| `redrabbit-delivery-count` | Retry attempt counter (added on retries) |
+
+The default serializer (System.Text.Json, camelCase, nulls omitted) writes an envelope:
+
+```json
+{ "eventType": "order-created", "eventVersion": 1, "payload": { "orderId": "…", "customerEmail": "…" } }
+```
+
+To change it, call one of these inside `AddRabbitMQ(configuration, configure: b => …)`:
+
+- `WithJsonSerializer(options => …)` to tweak the JSON options;
+- `WithSerializer<TSerializer>()` or `WithSerializer(instance)` to use your own `IMessageSerializer`. Its `ContentType` is sent as the message content type.
 
 ---
 
-## 🔧 Configuration Reference
+## Connections
 
-### `RabbitConnectionOptions`
-| Property | Type | Default | Validation |
-|---|---|---|---|
-| `Name` | `string` (required) | — | Non-empty, must match dictionary key |
-| `HostName` | `string` (required) | — | Non-empty |
-| `Port` | `int` | `5672` | `1–65535` |
-| `UserName` | `string` (required) | — | Non-empty |
-| `Password` | `string` (required) | — | Non-empty |
-| `VirtualHost` | `string` | `"/"` | — |
-| `RequestedHeartbeatSeconds` | `int` | `60` | `>= 1` |
-| `ConnectionTimeoutSeconds` | `int` | `30` | `>= 1` |
-| `InitialConnectRetryCount` | `int` | `5` | `>= 0` |
-| `MaxBackoffSeconds` | `int` | `60` | `>= 1` |
-| `Tls` | `TlsOptions?` | `null` | — |
+- **Multiple brokers or vhosts.** Add one entry per broker under `Connections` and point each producer/consumer at it with `ConnectionName`. Each entry is one AMQP connection.
+- **Startup.** Connections are opened in the background, so the application starts even if RabbitMQ is down. Consumers start consuming once connected; publishes wait up to 30 seconds.
+- **Reconnection.** When a connection drops, it is reopened with exponential backoff (1 s doubling up to `MaxBackoffSeconds`). Consumers re-declare their topology and resume. The driver's own automatic recovery is disabled on purpose.
+- **One host per connection.** There is no list of cluster nodes; use a load balancer or DNS name in front of a cluster.
+- **Code-based configuration** is also available: `AddRabbitMQ(settings => { settings.Connections["main"] = new() { … }; })`.
 
-### `RabbitProducerOptions`
-| Property | Type | Default | Validation |
-|---|---|---|---|
-| `ServiceKey` | `string` (required) | — | Non-empty, unique |
-| `ConnectionName` | `string` (required) | — | Must exist in `Connections` |
-| `ExchangeName` | `string` (required) | — | Non-empty |
-| `ExchangeType` | `string` | `"direct"` | Non-empty |
-| `RoutingKey` | `string` (required) | — | Non-empty |
-| `Mandatory` | `bool` | `true` | — |
-| `EnablePublisherConfirms` | `bool` | `true` | — |
-| `PublishConfirmTimeoutMs` | `int` | `5000` | `> 0` |
-| `AutoDeclareTopology` | `bool` | `true` | — |
-| `ChannelPoolSize` | `int` | `4` | `>= 0` (`0` = channel-per-publish) |
+### TLS
 
-### `RabbitConsumerOptions`
-| Property | Type | Default | Validation |
-|---|---|---|---|
-| `ServiceKey` | `string` (required) | — | Non-empty, unique |
-| `ConnectionName` | `string` (required) | — | Must exist in `Connections` |
-| `ExchangeName` | `string` (required) | — | Non-empty |
-| `ExchangeType` | `string` | `"direct"` | Non-empty |
-| `QueueName` | `string` (required) | — | Non-empty |
-| `RoutingKey` | `string` (required) | — | Non-empty |
-| `PrefetchCount` | `ushort` | `10` | `>= 1` (`0` deadlocks batch consumer) |
-| `MaxConcurrentHandlers` | `int` | `0` | `>= 0` (`0` = unlimited) |
-| `EnableDeadLetter` | `bool` | `true` | — |
-| `EnableRetry` | `bool` | `true` | — |
-| `MaxRetries` | `int` | `3` | `>= 1` |
-| `RetryDelays` | `TimeSpan[]?` | `[0s,5s,30s]` | `>= MaxRetries-1` entries, no negatives |
-| `EnableBatchConsumer` | `bool` | `false` | — |
-| `BatchSize` | `int` | `10` | `>= 1` (when `EnableBatchConsumer=true`) |
-| `BatchTimeoutMs` | `int` | `5000` | `> 0` (when `EnableBatchConsumer=true`) |
-| `AutoDeclareTopology` | `bool` | `true` | — |
+```json
+"Connections": {
+  "secure": {
+    "HostName": "rabbit.internal",
+    "Port": 5671,
+    "UserName": "app",
+    "Password": "…",
+    "Tls": {
+      "Enabled": true,
+      "CaCertificatePath": "/etc/ssl/corp-root-ca.pem"
+    }
+  }
+}
+```
 
-> Validation runs at startup via `IValidateOptions<RabbitMqSettings>` + `ValidateOnStart()`. Invalid configuration throws `OptionsValidationException` before any hosted service starts.
+- The server certificate is validated against the OS trust store, including hostname and revocation (CRL/OCSP).
+- `CaCertificatePath` trusts a private CA (PEM bundle or DER) as the only root.
+- `CertPath` / `CertPassphrase` enable mutual TLS.
+- `DisableCertificateRevocationCheck` is needed when the CA has no reachable CRL/OCSP endpoint.
+- `AllowUnknownCAs` accepts untrusted roots; it is for development only.
 
 ---
 
-## 📊 Observability & Metrics
+## Graceful shutdown
+
+When the host stops, each consumer stops receiving new messages and gives in-flight handlers up to `ShutdownDrainTimeout` (default 20 s) to finish and be ACKed. Handlers still running after that:
+
+- receive cancellation through their `CancellationToken`;
+- have their messages requeued without counting an attempt;
+- keep their DI scope alive until they actually finish.
+
+The drain is capped automatically so that it fits inside the host's shutdown timeout (`HostOptions.ShutdownTimeout`, 30 s by default) minus 10 s reserved for closing. A warning is logged when that happens. To drain for longer, raise the host timeout:
+
+```csharp
+builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(60));
+```
+
+---
+
+## Observability
 
 ### OpenTelemetry
-RabbitFlow exposes an `ActivitySource` (tracing) and a `Meter` (metrics). Register them in your OTel pipeline:
+
+RedRabbit uses one `ActivitySource` and one `Meter`, both named after `InstrumentationName` (default `"RabbitMQ"`; change it with `WithInstrumentationName` or the `InstrumentationName` setting).
 
 ```csharp
 builder.Services.AddOpenTelemetry()
-    .WithTracing(t => t.AddSource(RabbitMqActivitySource.SourceName))
-    .WithMetrics(m => m.AddMeter(RabbitMqMetrics.MeterName));
+    .WithTracing(t => t.AddSource("RabbitMQ"))
+    .WithMetrics(m => m.AddMeter("RabbitMQ"));
 ```
 
-### Metrics Exposed
+**Tracing.** Spans are named `{event} publish`, `{event} receive` and `{event} process`, with `messaging.*` attributes. Trace context is propagated in the `traceparent` header; consumer spans link to the producer span.
+
+**Metrics**
+
 | Metric | Type | Tags |
 |---|---|---|
-| `rabbitflow.published` | Counter | `producer_key`, `event_type`, `exchange` |
-| `rabbitflow.publish_errors` | Counter | `producer_key`, `event_type`, `error_type` |
-| `rabbitflow.publish_duration_ms` | Histogram | `producer_key`, `event_type`, `exchange` |
-| `rabbitflow.consumed` | Counter | `consumer_key`, `event_type`, `queue` |
-| `rabbitflow.consume_errors` | Counter | `consumer_key`, `event_type`, `error_type`, `queue` |
-| `rabbitflow.retried` | Counter | `consumer_key`, `event_type`, `queue`, `attempt` |
-| `rabbitflow.dead_lettered` | Counter | `consumer_key`, `event_type`, `queue`, `dlq_name` |
-| `rabbitflow.processing_duration_ms` | Histogram | `consumer_key`, `event_type`, `queue` |
-| `rabbitflow.batches_dispatched` | Counter | `consumer_key`, `event_type`, `queue` |
-| `rabbitflow.batch_size` | Histogram | `consumer_key`, `event_type`, `queue` |
-| `rabbitflow.channel_pool.rented` | Counter | `producer_key` |
-| `rabbitflow.channel_pool.returned` | Counter | `producer_key` |
-| `rabbitflow.channel_pool.discarded` | Counter | `producer_key` |
-| `rabbitflow.channel_pool.created` | Counter | `producer_key` |
+| `redrabbit.published` | Counter | `producer_key`, `event_type`, `exchange` |
+| `redrabbit.publish_errors` | Counter | `producer_key`, `event_type`, `error_type` |
+| `redrabbit.publish_duration_ms` | Histogram | `producer_key`, `event_type`, `exchange` |
+| `redrabbit.consumed` | Counter | `consumer_key`, `event_type`, `queue` |
+| `redrabbit.consume_errors` | Counter | `consumer_key`, `event_type`, `queue`, `error_type` |
+| `redrabbit.processing_duration_ms` | Histogram | `consumer_key`, `event_type`, `queue` |
+| `redrabbit.retried` | Counter | `consumer_key`, `event_type`, `queue`, `attempt` |
+| `redrabbit.dead_lettered` | Counter | `consumer_key`, `event_type`, `queue`, `dlq_name` |
+| `redrabbit.handlers_abandoned` | Counter | `consumer_key`, `event_type`, `queue` |
+| `redrabbit.batches_dispatched` | Counter | `consumer_key`, `event_type`, `queue`, `flush_reason` |
+| `redrabbit.batch_size` | Histogram | `consumer_key`, `event_type`, `queue` |
+| `redrabbit.channel_pool.rented` / `.returned` / `.discarded` / `.created` | Counter | `producer_key` |
 
-### Health Checks
+`redrabbit.dead_lettered` counts messages that exhausted their retries (including those discarded when `EnableDeadLetter = false`).
+
+### Health checks
+
 ```csharp
 builder.Services.AddHealthChecks()
-    .AddRabbitMqHealthCheck(connectionName: "main");   // Single connection
-    // or
-    .AddRabbitMqAllHealthCheck();                       // Aggregate all connections
+    .AddRabbitMq("main")    // one connection: Healthy while it is open
+    .AddRabbitMqAll();      // every connection: Unhealthy if any is closed
 ```
 
----
-
-## 🔌 Connection Resilience
-
-RabbitFlow owns the reconnection lifecycle. The driver's built-in auto-recovery is disabled (`AutomaticRecoveryEnabled = false`) to avoid races with the manual reconnect loop:
-
-1. **Connection drops** → Driver fires `ConnectionShutdownAsync`.
-2. `OnConnectionShutdown` signals a `TaskCompletionSource` and nulls the connection.
-3. The background loop wakes up, applies exponential backoff (1s → 2s → 4s → ... → `MaxBackoffSeconds` cap), and creates a new `IConnection`.
-4. Publishers and consumers re-declare topology idempotently on the new connection.
-
-This ensures one reconnection path and a single source of truth for the live `IConnection` — no duplicate TCP connections during broker restarts.
-
-> 📖 See [CONCURRENCY.md](CONCURRENCY.md) for the full concurrency analysis and the invariants that future contributors must preserve when modifying connection, channel pool, or consumer code.
+Both are tagged `rabbitmq`. `IRabbitConnectionRegistry` exposes the same connection state to your own code.
 
 ---
 
-## 📄 License
+## Configuration reference
 
-[MIT](LICENSE) — see [LICENSE](LICENSE) for details.
+### Connection (`Connections:{name}`)
+
+| Property | Default | Notes |
+|---|---|---|
+| `HostName`, `UserName`, `Password` | — | Required |
+| `Port` | `5672` | 1–65535 (TLS usually `5671`) |
+| `VirtualHost` | `/` | |
+| `RequestedHeartbeatSeconds` | `60` | ≥ 1 |
+| `ConnectionTimeoutSeconds` | `30` | TCP connect and AMQP handshake timeout; ≥ 1 |
+| `MaxBackoffSeconds` | `60` | Reconnection backoff cap; ≥ 1 |
+| `Tls` | `null` | `Enabled`, `ServerName`, `CaCertificatePath`, `CertPath`, `CertPassphrase`, `Protocol`, `DisableCertificateRevocationCheck`, `AllowUnknownCAs` |
+
+### Producer (`Producers[]`)
+
+| Property | Default | Notes |
+|---|---|---|
+| `ServiceKey`, `ConnectionName`, `ExchangeName`, `RoutingKey` | — | Required; `ServiceKey` must be unique |
+| `ExchangeType` | `direct` | |
+| `EnablePublisherConfirms` | `true` | |
+| `PublishConfirmTimeoutMs` | `5000` | > 0 |
+| `Mandatory` | `true` | Unroutable messages throw (requires confirms) |
+| `Persistent` | `true` | |
+| `ChannelPoolSize` | `4` | `0` = channel per publish |
+| `AutoDeclareTopology` | `true` | Declares the exchange |
+| `ExchangeArguments` | `null` | |
+
+### Consumer (`Consumers[]`)
+
+| Property | Default | Notes |
+|---|---|---|
+| `ServiceKey`, `ConnectionName`, `ExchangeName`, `QueueName`, `RoutingKey` | — | Required; `ServiceKey` must be unique |
+| `ExchangeType` | `direct` | |
+| `PrefetchCount` | `10` | ≥ 1 |
+| `MaxConcurrentHandlers` | `0` | `0` = up to `PrefetchCount` |
+| `ShutdownDrainTimeout` | `00:00:20` | Capped to fit the host shutdown timeout |
+| `EnableRetry` | `true` | |
+| `MaxRetries` | `3` | Total attempts; ≥ 1 |
+| `RetryDelays` | `[0s, 5s, 30s]` | ≥ `MaxRetries - 1` entries; use whole seconds |
+| `EnableDeadLetter` | `true` | `false` discards instead of dead-lettering |
+| `DeadLetter` | `null` | `ExchangeName`, `QueueName`, `ExchangeType`, `RoutingKey`, `AutoDeclare`, arguments |
+| `EnableBatchConsumer` | `false` | |
+| `BatchSize` | `10` | Batch mode only |
+| `BatchTimeoutMs` | `5000` | Batch mode only |
+| `AutoDeclareTopology` | `true` | Declares exchange, queues and bindings |
+| `QueueArguments` | `null` | Extra arguments for the main queue |
+| `MessageTtl` | `null` | Main queue message TTL |
+| `SingleActiveConsumer` | `false` | |
+| `ConsumerTag` | `null` | |
+
+Top-level settings: `InstrumentationName` (default `"RabbitMQ"`).
+
+> RabbitMQ refuses to redeclare an existing queue with different arguments. After changing `RetryDelays`, `MessageTtl`, `QueueArguments` or dead-letter settings on a queue that already exists, delete the affected queues (or migrate them) first.
 
 ---
 
-## 📋 Project Status
+## Exceptions
 
-RabbitFlow is **pre-1.0** (active development). See [STATUS.md](STATUS.md) for:
-- Known limitations (by design)
-- Known technical debt
-- Roadmap (post-1.0)
-- Adoption recommendation (pilot in non-critical services first)
+All RedRabbit exceptions derive from `RabbitMqException`.
+
+| Exception | Thrown when |
+|---|---|
+| `AmbiguousProducerException` | Publishing without `ProducerKey` while zero or several producers are configured |
+| `ProducerNotFoundException` | `ProducerKey` does not match any producer |
+| `PublisherNackException` | The broker NACKed the message, or returned it as unroutable (`IsReturn`) |
+| `PublisherConfirmTimeoutException` | No confirm within `PublishConfirmTimeoutMs` |
+| `EventVersionNewerThanRegisteredException` | (consumer side) a message is newer than the latest registered upgrader |
+| `MessageDeserializationException` | (consumer side) the body cannot be deserialized; the message is dead-lettered |
+
+Configuration errors surface at startup as `OptionsValidationException`. A publish that cannot get a connection within 30 seconds throws `TimeoutException`.
+
+---
+
+## Delivery guarantees
+
+- **At-least-once.** A message can be processed more than once: after a connection loss before the ACK, after a shutdown that requeued an unfinished handler, or if an ACK is lost. Make handlers idempotent.
+- **No loss in the retry path.** The original message is ACKed only after its retry copy is confirmed by the broker.
+- **Publishing is not transactional** with your database. If you need that, use an outbox in your application.
+
+---
+
+## Documentation
+
+- [Project status and limitations](https://github.com/rojo1585/RedRabbit/blob/main/STATUS.md)
+- [Concurrency design](https://github.com/rojo1585/RedRabbit/blob/main/CONCURRENCY.md)
+
+## License
+
+[MIT](https://github.com/rojo1585/RedRabbit/blob/main/LICENSE.txt)
