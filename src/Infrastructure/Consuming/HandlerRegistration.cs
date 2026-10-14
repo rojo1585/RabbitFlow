@@ -70,7 +70,7 @@ internal sealed class HandlerTypeRegistry
     /// </summary>
     public (Type HandlerType, Type EventType, bool IsBatch)? Resolve(string consumerKey, string eventTypeName)
     {
-        return _lookup.GetValueOrDefault((consumerKey, eventTypeName));
+        return _lookup.TryGetValue((consumerKey, eventTypeName), out var entry) ? entry : null;
     }
 
     /// <summary>

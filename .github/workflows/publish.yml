@@ -1,0 +1,175 @@
+# Publishes RedRabbit to nuget.org ON DEMAND — merging to main never publishes by itself.
+#
+#   Tag vX.Y.Z[-pre]               → X.Y.Z[-pre] + GitHub Release   e.g. 0.1.0, 0.1.0-preview.1
+#       git tag v0.1.0 && git push origin v0.1.0
+#
+#   Actions → NuGet Publish → "Run workflow" (manual):
+#       channel rc     → {BASE_VERSION}-rc.{run}     only from main          e.g. 0.1.0-rc.13
+#       channel alpha  → {BASE_VERSION}-alpha.{run}  from any branch          e.g. 0.1.0-alpha.12
+#       dry run        → builds, tests and packs, but does not publish
+#
+
+name: NuGet Publish
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Prerelease channel (rc: only from main; alpha: any branch)"
+        type: choice
+        options: [ rc, alpha ]
+        default: rc
+      dry_run:
+        description: "Dry run: build, test and pack without publishing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: nuget-org
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Resolve package version
+      id: version
+      env:
+        BASE_VERSION: ${{ vars.BASE_VERSION }}
+        RUN_NUMBER: ${{ github.run_number }}
+        INPUT_CHANNEL: ${{ inputs.channel }}
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not a valid version. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease (e.g. v0.1.0-preview.1)."
+            exit 1
+          fi
+          CHANNEL="release"
+        else
+          if ! [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Repository variable BASE_VERSION is '${BASE_VERSION}'. Set it to MAJOR.MINOR.PATCH (e.g. 0.1.0) in Settings → Secrets and variables → Actions → Variables."
+            exit 1
+          fi
+          CHANNEL="$INPUT_CHANNEL"
+          case "$CHANNEL" in
+            rc)
+              if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+                echo "::error::Release candidates are published from main only (this run is on '$GITHUB_REF_NAME'). Pick the 'alpha' channel or run the workflow on main."
+                exit 1
+              fi ;;
+            alpha) ;;
+            *) echo "::error::Unknown channel '$CHANNEL'."; exit 1 ;;
+          esac
+          VERSION="${BASE_VERSION}-${CHANNEL}.${RUN_NUMBER}"
+        fi
+
+        PRERELEASE=false
+        [[ "$VERSION" == *-* ]] && PRERELEASE=true
+
+        {
+          echo "version=$VERSION"
+          echo "channel=$CHANNEL"
+          echo "prerelease=$PRERELEASE"
+        } >> "$GITHUB_OUTPUT"
+        echo "Publishing RedRabbit $VERSION ($CHANNEL)"
+
+    - name: Ensure the tagged commit is on main
+      if: startsWith(github.ref, 'refs/tags/')
+      run: |
+        git fetch --no-tags origin main
+        if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+          echo "::error::Tag $GITHUB_REF_NAME points to $GITHUB_SHA, which is not on main. Tag a commit that has been merged into main."
+          exit 1
+        fi
+
+    - name: Ensure the nuget.org API key is configured
+      if: ${{ !inputs.dry_run }}
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: |
+        if [ -z "$NUGET_API_KEY" ]; then
+          echo "::error::The NUGET_API_KEY secret is not set. Create a nuget.org API key with the Push scope and add it as a repository or 'nuget-org' environment secret."
+          exit 1
+        fi
+
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: |
+          8.0.x
+          9.0.x
+          10.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore src/RedRabbit.slnx
+
+    - name: Build
+      run: dotnet build src/RedRabbit.slnx --no-restore --configuration Release -p:Version=${{ steps.version.outputs.version }}
+
+    - name: Test
+      run: dotnet test src/RedRabbit.slnx --no-build --configuration Release --verbosity normal
+
+    - name: Pack
+      run: dotnet pack src/RedRabbit.csproj --no-build --configuration Release --output artifacts -p:Version=${{ steps.version.outputs.version }}
+
+    - name: Upload package
+      uses: actions/upload-artifact@v7
+      with:
+        name: nuget-package-${{ steps.version.outputs.version }}
+        path: |
+          artifacts/*.nupkg
+          artifacts/*.snupkg
+
+    - name: Publish to nuget.org
+      if: ${{ !inputs.dry_run }}
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Create GitHub release
+      if: steps.version.outputs.channel == 'release' && !inputs.dry_run
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ steps.version.outputs.version }}
+        PRERELEASE: ${{ steps.version.outputs.prerelease }}
+      run: |
+        PRERELEASE_FLAG=""
+        if [ "$PRERELEASE" = "true" ]; then
+          PRERELEASE_FLAG="--prerelease"
+        fi
+        if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          echo "Release $GITHUB_REF_NAME already exists; uploading packages to it."
+          gh release upload "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg --clobber
+        else
+          gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg artifacts/*.snupkg \
+            --title "RedRabbit $VERSION" \
+            --generate-notes \
+            $PRERELEASE_FLAG
+        fi
+
+    - name: Summary
+      if: always()
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        OUTCOME: ${{ job.status }}
+      run: |
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "### Dry run: RedRabbit $VERSION built, tested and packed (not published) — $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "### RedRabbit $VERSION — $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://www.nuget.org/packages/RedRabbit/$VERSION" >> "$GITHUB_STEP_SUMMARY"
+        fi

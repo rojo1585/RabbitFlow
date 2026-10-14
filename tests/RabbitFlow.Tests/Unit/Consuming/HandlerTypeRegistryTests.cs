@@ -36,11 +36,7 @@ public class HandlerTypeRegistryTests
     {
         var registry = new HandlerTypeRegistry([]);
         var result = registry.Resolve("unknown", "unknown");
-        result.Should().NotBeNull();
-        result.HasValue.Should().BeTrue();
-        result.Value.HandlerType.Should().BeNull();
-        result.Value.EventType.Should().BeNull();
-        result.Value.IsBatch.Should().BeFalse();
+        result.Should().BeNull("consumers rely on a null result to reject events with no registered handler");
     }
 
     [Fact]

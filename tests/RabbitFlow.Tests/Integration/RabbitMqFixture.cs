@@ -15,8 +15,7 @@ public sealed class RabbitMqFixture : IAsyncLifetime
     private const string TestUserName = "testuser";
     private const string TestPassword = "testpass";
 
-    private readonly RabbitMqContainer _container = new RabbitMqBuilder()
-     .WithImage("rabbitmq:3.13-management-alpine")
+    private readonly RabbitMqContainer _container = new RabbitMqBuilder("rabbitmq:3.13-management-alpine")
      .WithUsername(TestUserName)
      .WithPassword(TestPassword)
      .WithWaitStrategy(Wait.ForUnixContainer().UntilMessageIsLogged("Server startup complete"))
