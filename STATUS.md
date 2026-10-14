@@ -1,128 +1,98 @@
 # Project Status
 
-> This document provides a transparent assessment of the current state of RabbitFlow.
-> It complements the [README](README.md) (which describes what the package does) with
-> known limitations, technical debt, maintenance model, and adoption recommendations.
+This page describes the current state of RedRabbit: how mature it is, what has been verified, and the limitations you should know about before adopting it. For what the package does and how to use it, see the [README](README.md).
 
 ---
 
-## Current Version
+## Maturity
 
-**Pre-1.0 (active development)**
-
-The package is functionally complete for its intended use cases. The existing test
-suite (unit + integration with Testcontainers/RabbitMQ) passes on GitHub Actions
-using .NET 8 and .NET 10 SDKs.
-
-A **pilot deployment** in a non-critical service is recommended before expanding to
-business-critical workloads.
+| | |
+|---|---|
+| **Version** | `0.x` pre-release (first published version: `0.1.0-preview.1`) |
+| **API stability** | Not frozen. Public types and option names may still change before `1.0`. |
+| **Recommended use** | Pilot in a non-critical service (notifications, audit, webhooks) before business-critical workloads. |
+| **Maintainers** | One. The project is MIT-licensed, so it can be forked and maintained by adopters if needed. |
 
 ---
 
-## Maintenance Model
+## What is verified
 
-### Authorship & License
-RabbitFlow is an open-source project released under the [MIT License](LICENSE). The
-MIT license grants full rights to use, modify, fork, and distribute — ensuring the
-package remains usable by any adopter regardless of the author's continued
-involvement.
+- **221 automated tests**, run on every pull request and on `main` by GitHub Actions:
+  - unit tests for configuration validation, retry policy, versioning, serialization, TLS validation, shutdown budget and handler execution;
+  - integration tests against a real RabbitMQ in Docker (Testcontainers) covering publish/consume round trips, publisher confirms, multiple connections, retries and dead-lettering (exact attempt counts), batch consumers, event upgrades and graceful shutdown.
+- **Build:** the package targets `net8.0`, `net9.0` and `net10.0` and builds with zero warnings (warnings are treated as errors).
+- **Test runtime:** tests run on .NET 8 only. The `net9.0` and `net10.0` builds are compiled but not exercised by the test suite.
+- **Broker version:** integration tests use **RabbitMQ 3.13**. RabbitMQ 4.x has not been tested.
 
-### Bus factor
-The current bus factor is 1 (single maintainer). This is the main sustainability risk
-and is acknowledged honestly here. Mitigations:
-
-| Risk | Mitigation | Status |
-|------|------------|--------|
-| Maintainer becomes unavailable | MIT license → any adopter can fork and continue | ✅ In place |
-| Knowledge concentration | Codebase is documented (README, STATUS, CONCURRENCY, XML docs); any senior .NET dev can apply patches | ✅ In place |
-| Long-term sustainability | Encourage external contributions via GitHub; build a small community around the package | 🟡 Post-1.0 |
-
-If your organization depends on RabbitFlow for business-critical workloads, consider:
-- Pinning a specific version in your `nuget.config` (so upstream changes don't surprise you).
-- Maintaining an internal fork if you need guarantees beyond the upstream cadence.
-- Sponsoring or contributing to the project to help reduce the bus factor.
+Not verified: throughput and latency under load (no benchmarks are published), long-running soak tests, and behaviour against clustered brokers.
 
 ---
 
-## Known Limitations (By Design)
+## Limitations
 
-These are deliberate scope decisions for the current version — not bugs:
+These are known and current. Some are design decisions, others are candidates for improvement before `1.0`.
 
-1. **Single instrumentation name for tracing per process** — `RabbitMqActivitySource`
-   is a static singleton. The first `AddRabbitMQ()` call's `InstrumentationName` wins
-   for tracing; subsequent calls with different names are silently ignored for
-   tracing. Metrics (`RabbitMqMetrics`) are per-DI-container and not affected.
-   To use different tracing names in the same process, isolate per app domain.
+### Delivery and scope
 
-2. **No outbox pattern** — RabbitFlow does not coordinate publish operations with
-   database transactions. If you need exactly-once publish with EF Core, implement
-   an outbox table and a dispatcher outside RabbitFlow.
+- **At-least-once delivery.** Messages can be processed more than once (connection loss before an ACK, a handler abandoned at shutdown, a lost ACK). Handlers must be idempotent; there is no built-in inbox or deduplication.
+- **No transactional publishing.** Publishing is not coordinated with database transactions; there is no outbox.
+- **No service-bus features.** No sagas, request/response, scheduled messages or message routing beyond RabbitMQ exchanges.
+- **Ordering is not guaranteed.** Consumers process up to `PrefetchCount` messages in parallel by default, and retries change the order. Sequential processing requires `PrefetchCount = 1` or `MaxConcurrentHandlers = 1`.
 
-3. **No inbox / idempotency** — Handlers are responsible for idempotency. RabbitFlow
-   guarantees at-least-once delivery (the broker may redeliver on reconnect or
-   retry); duplicate consumption is possible and must be handled by the handler.
+### Interoperability
 
-4. **No SAGA orchestration** — RabbitFlow is a message publisher/consumer, not a
-   workflow engine. For SAGA support, consider MassTransit or NServiceBus.
+- **Proprietary wire format.** Messages use a RedRabbit JSON envelope and require the `x-event-type` header. Systems that do not use RedRabbit must follow that format to publish to RedRabbit consumers, and must unwrap the envelope to read RedRabbit messages. A custom `IMessageSerializer` can change the body format, but the headers are still required.
+- **No custom headers on publish.** The publishing API does not let you add your own headers.
 
-5. **No circuit breaker / hedging** — Publisher-side retries when the broker is down
-   rely on the `ManagedConnection` reconnect loop with exponential backoff. There
-   is no Polly integration or circuit breaker.
+### Connections
 
-6. **Driver's `AutomaticRecoveryEnabled` is disabled** — RabbitFlow owns the
-   reconnection lifecycle to avoid races with the manual reconnect loop. This is
-   intentional and documented in `CONCURRENCY.md`.
+- **One host per connection.** There is no list of cluster nodes or client-side failover; put a load balancer or a DNS name in front of a cluster.
+- **Publishing while disconnected waits up to 30 seconds** (not configurable) for a connection before throwing `TimeoutException`.
+- **Reconnection detection is polled.** While a connection is being re-established, channel creation checks for it every 200 ms.
 
----
+### Publishing
 
-## Known Technical Debt
+- **Topology is declared on every publish** when `AutoDeclareTopology` is on (one extra round trip to the broker per publish). Turn it off for producers whose exchange already exists if this matters.
+- **Batch publishing is not atomic.** A failure part-way leaves the earlier messages published. `PublishOptions.CorrelationId` is not applied to batches.
+- **Unroutable messages are only detected with publisher confirms enabled.** With confirms disabled, returned messages are dropped silently.
 
-These items do not affect correctness but are candidates for future improvement:
+### Consuming
 
-| Item | Impact | Candidate Solution |
-|------|--------|--------------------|
-| ~400 lines duplicated between `NamedRabbitConsumer` and `NamedBatchRabbitConsumer` | Maintainability — changes must be applied in both classes | Extract a shared `RabbitConsumerBase` or helper class |
-| No load-test benchmarks published | Capacity planning requires adopters to benchmark their own workload | Add a load-test script to the repo; publish reference numbers for common configurations |
-| `ManagedConnection.CreateChannelAsync` uses a 200ms busy-poll while waiting for reconnect | Reconnect latency up to ~200ms average | Replace with `TaskCompletionSource` signaled by the connection loop |
-| `NamedRabbitPublisher` declares topology on every channel rental instead of only after reconnect | One extra AMQP round-trip per publish | Track topology-declared state per connection and reset on shutdown |
-| Bus factor = 1 | Sustainability | Encourage external contributions; MIT license enables forking |
+- **Rejected messages are only logged.** Messages without an `x-event-type` header, or with no registered handler, are rejected to the dead-letter queue with a warning log, but they are not counted in metrics and do not trigger `IDeadLetterHandler`.
+- **Queue arguments cannot change in place.** RabbitMQ refuses to redeclare a queue with different arguments. Changing `RetryDelays`, `MessageTtl`, `QueueArguments` or dead-letter settings for an existing queue requires deleting or migrating the queue.
+- **Retry delays are whole seconds.** Retry queues are named `{queue}.retry.{N}s`; two delays that round to the same second collide.
+- **Quorum and stream queues are not supported as first-class options.** A queue type can be passed through `QueueArguments` (main queue) or `DeadLetter.QueueArguments` (DLQ), but this is untested. Retry queues are always declared without a queue type, so they get the virtual host's default (normally classic).
 
----
+### Configuration and diagnostics
 
-## Roadmap
+- **No configuration reload.** Settings are read once at startup; changes require a restart.
+- **One tracing name per process.** The `ActivitySource` is static: the first `InstrumentationName` registered in a process is used for tracing. Metrics are per container and unaffected.
+- **Logging volume.** Some per-message paths (retries, batch dispatch) log at `Information` level, and logging does not use source-generated `LoggerMessage` delegates.
 
-Features explicitly **deferred** to future versions to keep the 1.0 scope focused
-and the API surface minimal:
+### Maintenance
 
-- **1.1** — Refactors (`RabbitConsumerBase` extraction, `CreateChannelAsync` TCS
-  signaling, topology declaration optimization).
-- **1.2** — Top 2-3 features requested by early adopters (candidates: Outbox,
-  Inbox/idempotency, Polly integration, `IDeadLetterHandler<TEvent>` typed,
-  `IOptionsMonitor` hot-reload, Quorum/Stream queue first-class support).
-- **2.0+** — Larger features that may require API changes (Avro/Protobuf schema
-  registry, Roslyn analyzers, source generators for handler registration).
-
-Feature requests are welcome — please open a GitHub issue with your use case.
+- **Duplicated consumer code.** The single-message and batch consumers share a lot of logic that is implemented twice, so fixes must be applied to both.
+- **Single maintainer.** Pin exact package versions in production, and consider a fork if you need guarantees beyond the upstream release cadence.
 
 ---
 
-## Adoption Recommendation
+## Planned before 1.0
 
-| Workload type | Recommendation |
-|---------------|----------------|
-| **Non-critical service** (notifications, webhooks, audit logs) | ✅ Adopt now — pilot for 4-6 weeks |
-| **Business-critical service** (orders, payments, inventory) | 🟡 After successful pilot in non-critical service |
-| **Mission-critical / life-safety** | 🔴 Wait for 1.0 stable + production soak reports from early adopters |
+- Freeze and track the public API.
+- Run the test suite on .NET 10 and against RabbitMQ 4.x.
+- Declare producer topology once per connection instead of on every publish.
+- Signal reconnection instead of polling it.
+- Source-generated logging, with per-message logs moved to `Debug`.
+- Extract the logic shared by both consumer types.
 
-### Pilot checklist
-- [ ] Deploy to a non-critical service
-- [ ] Monitor `rabbitflow.consume_errors`, `rabbitflow.dead_lettered`, `rabbitflow.retried` for 1 week
-- [ ] Verify no `OutOfMemoryException` or connection leak trends
-- [ ] Confirm graceful shutdown behavior (in-flight handlers complete within timeout)
-- [ ] Report any issues via GitHub Issues
+Feature requests and bug reports are welcome as [GitHub issues](https://github.com/rojo1585/RedRabbit/issues).
 
 ---
 
-## License
+## Adopting it in a pilot
 
-[MIT](LICENSE) — see [LICENSE](LICENSE) for details.
+1. Start with a non-critical service and make its handlers idempotent.
+2. Monitor `redrabbit.consume_errors`, `redrabbit.retried`, `redrabbit.dead_lettered` and `redrabbit.handlers_abandoned`, and alert on messages arriving in the `.dlq` queues.
+3. Check the logs for rejected messages (missing `x-event-type` header or no handler), since they are not counted in metrics.
+4. Deploy a few times under load and confirm that shutdowns finish within the host timeout without unexpected dead-lettered messages.
+5. Report problems as GitHub issues.
