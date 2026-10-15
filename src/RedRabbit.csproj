@@ -11,7 +11,7 @@
 
 	<PropertyGroup>
 		<PackageId>RedRabbit</PackageId>
-		<Version>1.0.0</Version>
+		<Version>1.0.1</Version>
 		<Authors>Rojo1585</Authors>
 		<PackageIcon>icon.png</PackageIcon>
 		<Description>Lightweight RabbitMQ messaging for .NET built on RabbitMQ.Client 7: multi-connection and multi-producer publishing with publisher confirms and channel pooling, hosted consumers with delayed retries and dead-lettering, batch consumers, event versioning, health checks, and OpenTelemetry tracing and metrics.</Description>
