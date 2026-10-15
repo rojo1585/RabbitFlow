@@ -13,6 +13,7 @@
 		<PackageId>RedRabbit</PackageId>
 		<Version>1.0.0</Version>
 		<Authors>Rojo1585</Authors>
+		<PackageIcon>icon.png</PackageIcon>
 		<Description>Lightweight RabbitMQ messaging for .NET built on RabbitMQ.Client 7: multi-connection and multi-producer publishing with publisher confirms and channel pooling, hosted consumers with delayed retries and dead-lettering, batch consumers, event versioning, health checks, and OpenTelemetry tracing and metrics.</Description>
 		<PackageTags>rabbitmq;amqp;messaging;eventbus;events;publisher;consumer;dead-letter;retry;opentelemetry</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -41,6 +42,7 @@
 	</ItemGroup>
 	<ItemGroup>
 		<None Include="..\README.md" Pack="true" PackagePath="\" Visible="false" />
+		<None Include="..\assets\icon.png" Pack="true" PackagePath="\" Visible="false" />
 	</ItemGroup>
 	<ItemGroup>
 		<InternalsVisibleTo Include="RedRabbit.Tests" />
